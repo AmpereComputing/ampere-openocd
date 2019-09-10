@@ -88,8 +88,10 @@ static int hwthread_update_threads(struct rtos *rtos)
 
 	target = rtos->target;
 
-	/* wipe out previous thread details if any */
+	/* wipe out previous thread details, but preserve GDB current_threadid */
+	int64_t current_threadid = rtos->current_threadid;
 	rtos_free_threadlist(rtos);
+	rtos->current_threadid = current_threadid;
 
 	/* determine the number of "threads" */
 	if (target->smp) {
