@@ -2,6 +2,7 @@
 
 /***************************************************************************
  *   Copyright (C) 2015 by David Ung                                       *
+ *   Copyright (C) 2019, Ampere Computing LLC                              *
  ***************************************************************************/
 
 #ifndef OPENOCD_TARGET_AARCH64_H
@@ -27,6 +28,11 @@
 enum aarch64_isrmasking_mode {
 	AARCH64_ISRMASK_OFF,
 	AARCH64_ISRMASK_ON,
+};
+
+enum aarch64_steponly_mode {
+	AARCH64_STEPONLY_OFF,
+	AARCH64_STEPONLY_ON,
 };
 
 struct aarch64_brp {
@@ -58,6 +64,8 @@ struct aarch64_common {
 	struct aarch64_brp *wp_list;
 
 	enum aarch64_isrmasking_mode isrmasking_mode;
+
+	enum aarch64_steponly_mode step_only_mode;
 };
 
 static inline struct aarch64_common *
