@@ -12,6 +12,8 @@
  *
  * Copyright (C) 2018 by Liviu Ionescu
  *   <ilg@livius.net>
+ *
+ * Copyright (C) 2019-2023, Ampere Computing LLC
  */
 
 #ifndef OPENOCD_TARGET_ARM_H
@@ -245,6 +247,18 @@ struct arm {
 	/** Write coprocessor from two registers. */
 	int (*mcrr)(struct target *target, int cpnum,
 			uint32_t op, uint32_t crm,
+			uint64_t value);
+
+	/** Read system register.  */
+	int (*mrs)(struct target *target, uint32_t ns_requested, uint32_t op0,
+			uint32_t op1, uint32_t op2,
+			uint32_t crn, uint32_t crm,
+			uint64_t *value);
+
+	/** Write system register.  */
+	int (*msr)(struct target *target, uint32_t ns_requested, uint32_t op0,
+			uint32_t op1, uint32_t op2,
+			uint32_t crn, uint32_t crm,
 			uint64_t value);
 
 	void *arch_info;
