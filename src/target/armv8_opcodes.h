@@ -2,6 +2,7 @@
 
 /*
  * Copyright (C) 2015 by pierrr kuo <vichy.kuo@gmail.com>
+ * Copyright (C) 2019-2020, Ampere Computing LLC
  */
 
 #ifndef OPENOCD_TARGET_ARMV8_OPCODES_H
@@ -129,10 +130,33 @@
 #define ARMV8_ISB				0xd5033fdf
 #define ARMV8_ISB_SY_T1				0xf3bf8f6f
 
-#define ARMV8_MRS(system, rt)	(0xd5300000 | ((system) << 5) | (rt))
+/* Move to ARM register from system register
+ * op0: first system register opcode
+ * op1: second system register opcode
+ * CRn: first system register operand
+ * CRm: second system register operand
+ * op2: third system register opcode
+ * Rd: destination register
+ */
+#define ARMV8_MRS_INSTR(op0, op1, rd, crn, crm, op2) \
+	(0xd5300000 | (rd) | ((op2) << 5) | ((crm) << 8) \
+	| ((crn) << 12) | ((op1) << 16) | ((op0) << 19))
+
+/* Move to system register from ARM register
+ * op0: first system register opcode
+ * op1: second system register opcode
+ * CRn: first system register operand
+ * CRm: second system register operand
+ * op2: third system register opcode
+ * Rd: destination register
+ */
+#define ARMV8_MSR_INSTR(op0, op1, rd, crn, crm, op2) \
+	(0xd5100000 | (rd) | ((op2) << 5) | ((crm) << 8) \
+	| ((crn) << 12) | ((op1) << 16) | ((op0) << 19))
+
+#define ARMV8_MRS(system, rt) ARMV8_MRS_INSTR(0, 0, rt, 0, 0, system)
 /* ARM V8 Move to system register. */
-#define ARMV8_MSR_GP(system, rt) \
-	(0xd5100000 | ((system) << 5) | (rt))
+#define ARMV8_MSR_GP(system, rt) ARMV8_MSR_INSTR(0, 0, rt, 0, 0, system)
 /* ARM V8 Move immediate to process state field. */
 #define ARMV8_MSR_IM(op1, crm, op2) \
 	(0xd500401f | ((op1) << 16)  | ((crm) << 8) | ((op2) << 5))
