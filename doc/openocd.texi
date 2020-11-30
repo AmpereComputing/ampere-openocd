@@ -505,6 +505,12 @@ Texas Instruments has an adapter called @b{ICDI}.
 It is not to be confused with the FTDI based adapters that were originally fitted to their
 evaluation boards. This is the adapter fitted to the Stellaris LaunchPad.
 
+@section USB Nuvoton Nu-Link
+Nuvoton has an adapter called @b{Nu-Link}.
+It is available either as stand-alone dongle and embedded on development boards.
+It supports SWD, serial port bridge and mass storage for firmware update.
+Both Nu-Link v1 and v2 are supported.
+
 @section USB CMSIS-DAP based
 ARM has released a interface standard called CMSIS-DAP that simplifies connecting
 debuggers to ARM Cortex based targets @url{http://www.keil.com/support/man/docs/dapdebug/dapdebug_introduction.htm}.
@@ -609,6 +615,12 @@ produced, PDF schematics are easily found and it is easy to make.
 @* A JTAG driver acting as a client for the JTAG VPI server interface.
 @* Link: @url{http://github.com/fjullien/jtag_vpi}
 
+@item @b{jtag_dpi}
+@* A JTAG driver acting as a client for the SystemVerilog Direct Programming
+Interface (DPI) for JTAG devices. DPI allows OpenOCD to connect to the JTAG
+interface of a hardware model written in SystemVerilog, for example, on an
+emulation model of target hardware.
+
 @item @b{xlnx_pcie_xvc}
 @* A JTAG driver exposing Xilinx Virtual Cable over PCI Express to OpenOCD as JTAG/SWD interface.
 
@@ -712,8 +724,11 @@ Configuration files and scripts are searched for in
 @item the current directory,
 @item any search dir specified on the command line using the @option{-s} option,
 @item any search dir specified using the @command{add_script_search_dir} command,
-@item @file{$HOME/.openocd} (not on Windows),
 @item a directory in the @env{OPENOCD_SCRIPTS} environment variable (if set),
+@item @file{%APPDATA%/OpenOCD} (only on Windows),
+@item @file{$HOME/Library/Preferences/org.openocd} (only on Darwin),
+@item @file{$XDG_CONFIG_HOME/openocd} (@env{$XDG_CONFIG_HOME} defaults to @file{$HOME/.config}),
+@item @file{$HOME/.openocd},
 @item the site wide script library @file{$pkgdatadir/site} and
 @item the OpenOCD-supplied script library @file{$pkgdatadir/scripts}.
 @end enumerate
@@ -3064,7 +3079,8 @@ This is a driver that supports multiple High Level Adapters.
 This type of adapter does not expose some of the lower level api's
 that OpenOCD would normally use to access the target.
 
-Currently supported adapters include the STMicroelectronics ST-LINK and TI ICDI.
+Currently supported adapters include the STMicroelectronics ST-LINK, TI ICDI
+and Nuvoton Nu-Link.
 ST-LINK firmware version >= V2.J21.S4 recommended due to issues with earlier
 versions of firmware where serial number is reset after first use.  Suggest
 using ST firmware update utility to upgrade ST-LINK firmware even if current
@@ -3078,7 +3094,7 @@ Currently Not Supported.
 Specifies the serial number of the adapter.
 @end deffn
 
-@deffn {Config Command} {hla_layout} (@option{stlink}|@option{icdi})
+@deffn {Config Command} {hla_layout} (@option{stlink}|@option{icdi}|@option{nulink})
 Specifies the adapter layout to use.
 @end deffn
 
@@ -3227,6 +3243,22 @@ The USB device description string of the adapter.
 This value is only used with the standard variant.
 @end deffn
 @end deffn
+
+
+@deffn {Interface Driver} {jtag_dpi}
+SystemVerilog Direct Programming Interface (DPI) compatible driver for
+JTAG devices in emulation. The driver acts as a client for the SystemVerilog
+DPI server interface.
+
+@deffn {Config Command} {jtag_dpi_set_port} port
+Specifies the TCP/IP port number of the SystemVerilog DPI server interface.
+@end deffn
+
+@deffn {Config Command} {jtag_dpi_set_address} address
+Specifies the TCP/IP address of the SystemVerilog DPI server interface.
+@end deffn
+@end deffn
+
 
 @section Transport Configuration
 @cindex Transport
@@ -9342,6 +9374,12 @@ target code relies on. In a configuration file, the command would typically be c
 However, normally it is not necessary to use the command at all.
 @end deffn
 
+@deffn Command {aarch64 disassemble} address [count]
+@cindex disassemble
+Disassembles @var{count} instructions starting at @var{address}.
+If @var{count} is not specified, a single instruction is disassembled.
+@end deffn
+
 @deffn Command {aarch64 smp} [on|off]
 Display, enable or disable SMP handling mode. The state of SMP handling influences the way targets in an SMP group
 are handled by the run control. With SMP handling enabled, issuing halt or resume to one core will trigger
@@ -9676,8 +9714,31 @@ This is used to access 64-bit floating point registers on 32-bit targets.
 @end deffn
 
 @deffn Command {riscv set_prefer_sba} on|off
-When on, prefer to use System Bus Access to access memory.  When off, prefer to
-use the Program Buffer to access memory.
+When on, prefer to use System Bus Access to access memory.  When off (default),
+prefer to use the Program Buffer to access memory.
+@end deffn
+
+@deffn Command {riscv set_enable_virtual} on|off
+When on, memory accesses are performed on physical or virtual memory depending
+on the current system configuration. When off (default), all memory accessses are performed
+on physical memory.
+@end deffn
+
+@deffn Command {riscv set_enable_virt2phys} on|off
+When on (default), memory accesses are performed on physical or virtual memory
+depending on the current satp configuration. When off, all memory accessses are
+performed on physical memory.
+@end deffn
+
+@deffn Command {riscv resume_order} normal|reversed
+Some software assumes all harts are executing nearly continuously. Such
+software may be sensitive to the order that harts are resumed in. On harts
+that don't support hasel, this option allows the user to choose the order the
+harts are resumed in. If you are using this option, it's probably masking a
+race condition problem in your code.
+
+Normal order is from lowest hart index to highest. This is the default
+behavior. Reversed order is from highest hart index to lowest.
 @end deffn
 
 @deffn Command {riscv set_ir} (@option{idcode}|@option{dtmcs}|@option{dmi}) [value]
@@ -9689,6 +9750,26 @@ values.
 When utilizing version 0.11 of the RISC-V Debug Specification,
 @option{dtmcs} and @option{dmi} set the IR values for the DTMCONTROL
 and DBUS registers, respectively.
+@end deffn
+
+@deffn Command {riscv use_bscan_tunnel} value
+Enable or disable use of a BSCAN tunnel to reach DM.  Supply the width of
+the DM transport TAP's instruction register to enable.  Supply a value of 0 to disable.
+@end deffn
+
+@deffn Command {riscv set_ebreakm} on|off
+Control dcsr.ebreakm. When on (default), M-mode ebreak instructions trap to
+OpenOCD. When off, they generate a breakpoint exception handled internally.
+@end deffn
+
+@deffn Command {riscv set_ebreaks} on|off
+Control dcsr.ebreaks. When on (default), S-mode ebreak instructions trap to
+OpenOCD. When off, they generate a breakpoint exception handled internally.
+@end deffn
+
+@deffn Command {riscv set_ebreaku} on|off
+Control dcsr.ebreaku. When on (default), U-mode ebreak instructions trap to
+OpenOCD. When off, they generate a breakpoint exception handled internally.
 @end deffn
 
 @subsection RISC-V Authentication Commands
@@ -9714,7 +9795,7 @@ Write the 32-bit value to authdata.
 The following commands allow direct access to the Debug Module Interface, which
 can be used to interact with custom debug features.
 
-@deffn Command {riscv dmi_read}
+@deffn Command {riscv dmi_read} address
 Perform a 32-bit DMI read at address, returning the value.
 @end deffn
 

@@ -1558,7 +1558,7 @@ int adiv5_dap_apcsw_command(struct command_invocation *cmd)
 
 	switch (CMD_ARGC) {
 	case 0:
-		command_print(CMD, "ap %" PRIi32 " selected, csw 0x%8.8" PRIx32,
+		command_print(CMD, "ap %" PRIu32 " selected, csw 0x%8.8" PRIx32,
 			dap->apsel, apcsw);
 		return ERROR_OK;
 	case 1:

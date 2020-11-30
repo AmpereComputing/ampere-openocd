@@ -1018,6 +1018,17 @@ static int gdb_new_connection(struct connection *connection)
 			target_name(target),
 			target_state_name(target));
 
+	if (!target_was_examined(target)) {
+		LOG_ERROR("Target %s not examined yet, refuse gdb connection %d!",
+				  target_name(target), gdb_actual_connections);
+		gdb_actual_connections--;
+		return ERROR_TARGET_NOT_EXAMINED;
+	}
+
+	if (target->state != TARGET_HALTED)
+		LOG_WARNING("GDB connection %d on target %s not halted",
+					gdb_actual_connections, target_name(target));
+
 	/* DANGER! If we fail subsequently, we must remove this handler,
 	 * otherwise we occasionally see crashes as the timer can invoke the
 	 * callback fn.
@@ -1056,11 +1067,8 @@ static int gdb_connection_closed(struct connection *connection)
 	/* if this connection registered a debug-message receiver delete it */
 	delete_debug_msg_receiver(connection->cmd_ctx, target);
 
-	if (connection->priv) {
-		free(connection->priv);
-		connection->priv = NULL;
-	} else
-		LOG_ERROR("BUG: connection->priv == NULL");
+	free(connection->priv);
+	connection->priv = NULL;
 
 	target_unregister_event_callback(gdb_target_callback_event_handler, connection);
 
@@ -1380,8 +1388,8 @@ static int gdb_set_register_packet(struct connection *connection,
 	}
 
 	if (chars != (DIV_ROUND_UP(reg_list[reg_num]->size, 8) * 2)) {
-		LOG_ERROR("gdb sent %d bits for a %d-bit register (%s)",
-				(int) chars * 4, reg_list[reg_num]->size, reg_list[reg_num]->name);
+		LOG_ERROR("gdb sent %zu bits for a %" PRIu32 "-bit register (%s)",
+				chars * 4, reg_list[reg_num]->size, reg_list[reg_num]->name);
 		free(bin_buf);
 		free(reg_list);
 		return ERROR_SERVER_REMOTE_CLOSED;
@@ -1747,8 +1755,7 @@ static __attribute__ ((format (PRINTF_ATTRIBUTE_FORMAT, 5, 6))) void xml_printf(
 			char *t = *xml;
 			*xml = realloc(*xml, *size);
 			if (*xml == NULL) {
-				if (t)
-					free(t);
+				free(t);
 				*retval = ERROR_SERVER_REMOTE_CLOSED;
 				return;
 			}
@@ -2043,7 +2050,7 @@ static int gdb_generate_reg_type_description(struct target *target,
 		}
 		/* <vector id="id" type="type" count="count"/> */
 		xml_printf(&retval, tdesc, pos, size,
-				"<vector id=\"%s\" type=\"%s\" count=\"%d\"/>\n",
+				"<vector id=\"%s\" type=\"%s\" count=\"%" PRIu32 "\"/>\n",
 				type->id, type->reg_type_vector->type->id,
 				type->reg_type_vector->count);
 
@@ -2090,11 +2097,11 @@ static int gdb_generate_reg_type_description(struct target *target,
 			 *  <field name="name" start="start" end="end"/> ...
 			 * </struct> */
 			xml_printf(&retval, tdesc, pos, size,
-					"<struct id=\"%s\" size=\"%d\">\n",
+					"<struct id=\"%s\" size=\"%" PRIu32 "\">\n",
 					type->id, type->reg_type_struct->size);
 			while (field != NULL) {
 				xml_printf(&retval, tdesc, pos, size,
-						"<field name=\"%s\" start=\"%d\" end=\"%d\" type=\"%s\" />\n",
+						"<field name=\"%s\" start=\"%" PRIu32 "\" end=\"%" PRIu32 "\" type=\"%s\" />\n",
 						field->name, field->bitfield->start, field->bitfield->end,
 						gdb_get_reg_type_name(field->bitfield->type));
 
@@ -2135,14 +2142,14 @@ static int gdb_generate_reg_type_description(struct target *target,
 		 *  <field name="name" start="start" end="end"/> ...
 		 * </flags> */
 		xml_printf(&retval, tdesc, pos, size,
-				"<flags id=\"%s\" size=\"%d\">\n",
+				"<flags id=\"%s\" size=\"%" PRIu32 "\">\n",
 				type->id, type->reg_type_flags->size);
 
 		struct reg_data_type_flags_field *field;
 		field = type->reg_type_flags->fields;
 		while (field != NULL) {
 			xml_printf(&retval, tdesc, pos, size,
-					"<field name=\"%s\" start=\"%d\" end=\"%d\" type=\"%s\" />\n",
+					"<field name=\"%s\" start=\"%" PRIu32 "\" end=\"%" PRIu32 "\" type=\"%s\" />\n",
 					field->name, field->bitfield->start, field->bitfield->end,
 					gdb_get_reg_type_name(field->bitfield->type));
 
@@ -2295,9 +2302,9 @@ static int gdb_generate_target_description(struct target *target, char **tdesc_o
 				xml_printf(&retval, &tdesc, &pos, &size,
 						"<reg name=\"%s\"", reg_list[i]->name);
 				xml_printf(&retval, &tdesc, &pos, &size,
-						" bitsize=\"%d\"", reg_list[i]->size);
+						" bitsize=\"%" PRIu32 "\"", reg_list[i]->size);
 				xml_printf(&retval, &tdesc, &pos, &size,
-						" regnum=\"%d\"", reg_list[i]->number);
+						" regnum=\"%" PRIu32 "\"", reg_list[i]->number);
 				if (reg_list[i]->caller_save)
 					xml_printf(&retval, &tdesc, &pos, &size,
 							" save-restore=\"yes\"");

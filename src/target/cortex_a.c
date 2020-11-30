@@ -2500,7 +2500,7 @@ static int cortex_a_read_phys_memory(struct target *target,
 	if (!count || !buffer)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	LOG_DEBUG("Reading memory at real address " TARGET_ADDR_FMT "; size %" PRId32 "; count %" PRId32,
+	LOG_DEBUG("Reading memory at real address " TARGET_ADDR_FMT "; size %" PRIu32 "; count %" PRIu32,
 		address, size, count);
 
 	/* read memory through the CPU */
@@ -2517,7 +2517,7 @@ static int cortex_a_read_memory(struct target *target, target_addr_t address,
 	int retval;
 
 	/* cortex_a handles unaligned memory access */
-	LOG_DEBUG("Reading memory at address " TARGET_ADDR_FMT "; size %" PRId32 "; count %" PRId32,
+	LOG_DEBUG("Reading memory at address " TARGET_ADDR_FMT "; size %" PRIu32 "; count %" PRIu32,
 		address, size, count);
 
 	cortex_a_prep_memaccess(target, 0);
@@ -2536,7 +2536,7 @@ static int cortex_a_write_phys_memory(struct target *target,
 	if (!count || !buffer)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	LOG_DEBUG("Writing memory to real address " TARGET_ADDR_FMT "; size %" PRId32 "; count %" PRId32,
+	LOG_DEBUG("Writing memory to real address " TARGET_ADDR_FMT "; size %" PRIu32 "; count %" PRIu32,
 		address, size, count);
 
 	/* write memory through the CPU */
@@ -2553,7 +2553,7 @@ static int cortex_a_write_memory(struct target *target, target_addr_t address,
 	int retval;
 
 	/* cortex_a handles unaligned memory access */
-	LOG_DEBUG("Writing memory at address " TARGET_ADDR_FMT "; size %" PRId32 "; count %" PRId32,
+	LOG_DEBUG("Writing memory at address " TARGET_ADDR_FMT "; size %" PRIu32 "; count %" PRIu32,
 		address, size, count);
 
 	/* memory writes bypass the caches, must flush before writing */

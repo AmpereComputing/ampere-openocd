@@ -37,7 +37,25 @@
 #define JTAG_INSTANCE 0
 
 int jtag_instance = JTAG_INSTANCE;
+int jtag_hw_accel = 1;
 int jtag_fd;
+
+/* Local Function Prototypes */
+static enum jtag_endstate state_conversion(tap_state_t state);
+static int move_to_state(tap_state_t goal_state);
+static int jtag_driver_get_speed(int *speed);
+static int jtag_driver_set_speed(int speed);
+static int jtag_driver_speed_div(int speed, int *khz);
+static void jtag_driver_end_state(tap_state_t state);
+static int jtag_driver_execute_scan(struct scan_command *scan);
+static int jtag_driver_execute_runtest(int num_cycles, tap_state_t state);
+static int jtag_driver_execute_stableclocks(struct stableclocks_command *stableclocks);
+static int jtag_driver_reset(int trst, int srst);
+static int jtag_driver_execute_sleep(struct sleep_command *sleep);
+static int jtag_driver_execute_tms(struct tms_command *tms);
+static int jtag_driver_execute_queue(void);
+static int jtag_driver_init(void);
+static int jtag_driver_quit(void);
 
 static enum jtag_endstate state_conversion(tap_state_t state)
 {
@@ -128,17 +146,43 @@ static int move_to_state(tap_state_t goal_state)
 	return ret;
 }
 
-static int jtag_driver_speed(int speed)
+static int jtag_driver_get_speed(int *speed)
 {
 	int ret = ERROR_OK;
 	int ret_errno;
+	int local_speed;
 
-	ret_errno = ioctl(jtag_fd, JTAG_SIOCFREQ, &speed);
+	ret_errno = ioctl(jtag_fd, JTAG_GIOCFREQ, &local_speed);
 	if (ret_errno < 0) {
-		LOG_ERROR("JTAG DRIVER ERROR: couldn't set JTAG TCK frequency");
+		LOG_ERROR("JTAG DRIVER ERROR: ioctl call fail for %s", __func__);
 		ret = ERROR_FAIL;
-	} else
-		LOG_INFO("JTAG DRIVER INFO: Setting JTAG TCK frequency to %u", speed);
+	} else if (speed == NULL)
+		LOG_INFO("JTAG DRIVER INFO: Read JTAG TCK frequency of %u", local_speed);
+	else
+		*speed = local_speed;
+
+	return ret;
+}
+
+static int jtag_driver_set_speed(int expected_speed)
+{
+	int ret = ERROR_OK;
+	int ret_errno;
+	int actual_speed;
+
+	ret_errno = ioctl(jtag_fd, JTAG_SIOCFREQ, &expected_speed);
+	if (ret_errno < 0) {
+		LOG_ERROR("JTAG DRIVER ERROR: unable to program JTAG TCK frequency");
+		ret = ERROR_FAIL;
+	} else {
+		ret = jtag_driver_get_speed(&actual_speed);
+		if (ret != ERROR_OK)
+			LOG_ERROR("JTAG DRIVER ERROR: Set requested JTAG TCK frequency "
+				"to %u, unable to verify set frequency", expected_speed);
+		else
+			LOG_INFO("JTAG DRIVER INFO: Requested JTAG TCK frequency "
+				"%u, actual frequency %u", expected_speed, actual_speed);
+	}
 
 	return ret;
 }
@@ -228,18 +272,6 @@ static int jtag_driver_execute_scan(struct scan_command *scan)
 	return ret;
 }
 
-static void jtag_driver_execute_statemove(struct statemove_command *statemove)
-{
-	LOG_DEBUG_IO("JTAG DRIVER DEBUG: statemove end in %s",
-		tap_state_name(statemove->end_state));
-
-	jtag_driver_end_state(statemove->end_state);
-
-	/* shortest-path move to desired end state */
-	if (tap_get_state() != tap_get_end_state() || tap_get_end_state() == TAP_RESET)
-		move_to_state(tap_get_end_state());
-}
-
 static int jtag_driver_execute_runtest(int num_cycles, tap_state_t state)
 {
 	struct tck_bitbang bitbang;
@@ -294,31 +326,67 @@ static int jtag_driver_execute_stableclocks(struct stableclocks_command *stablec
 static int jtag_driver_reset(int trst, int srst)
 {
 	struct jtag_end_tap_state end_state;
+	struct tms_command tms;
+	struct jtag_xfer xfer;
+	uint32_t data_buf;
 	int ret = ERROR_OK;
 	int ret_errno;
+	uint8_t bits;
 
 	LOG_DEBUG_IO("JTAG DRIVER DEBUG: reset trst: %i srst %i", trst, srst);
 
 	if (trst == 1) {
-		end_state.reset = JTAG_FORCE_RESET;
-		end_state.endstate = JTAG_STATE_TLRESET;
-		end_state.tck = 0;
-		ret_errno = ioctl(jtag_fd, JTAG_SIOCSTATE, &end_state);
-		if (ret_errno < 0) {
-			LOG_ERROR("JTAG DRIVER ERROR: couldn't assert TRST");
-			ret = ERROR_FAIL;
-		} else
-			tap_set_state(TAP_RESET);
-	} else {
-		end_state.reset = JTAG_FORCE_RESET;
-		end_state.endstate = JTAG_STATE_IDLE;
-		end_state.tck = 0;
-		ret_errno = ioctl(jtag_fd, JTAG_SIOCSTATE, &end_state);
-		if (ret_errno < 0) {
-			LOG_ERROR("JTAG DRIVER ERROR: couldn't de-assert TRST");
-			ret = ERROR_FAIL;
-		} else
-			tap_set_state(TAP_IDLE);
+		if (jtag_hw_accel == 0) {
+			/* SW (bitbang) mode */
+			/* Perform ioctl() JTAG_SIOCSTATE call to reset JTAG */
+			/* controller state to Test-Logic-Reset (TLR) */
+			end_state.reset = JTAG_FORCE_RESET;
+			end_state.endstate = JTAG_STATE_TLRESET;
+			end_state.tck = 0;
+			ret_errno = ioctl(jtag_fd, JTAG_SIOCSTATE, &end_state);
+			if (ret_errno < 0) {
+				LOG_ERROR("JTAG DRIVER ERROR: couldn't reset JTAG state machine");
+				ret = ERROR_FAIL;
+			} else {
+				LOG_INFO("JTAG DRIVER INFO: SW - Successfully reset JTAG state machine");
+				tap_set_state(TAP_RESET);
+			}
+		} else {
+			/* HW acceleration mode enabled */
+
+			/* There are two issues with initializing the controller for HW mode. */
+			/* 1. Resetting the JTAG state machine to Test-Logic-Reset (TLR) */
+			/*    doesn't work with the ioctl() JTAG_SIOCSTATE call as it */
+			/*    does with (bitbang) mode. The workaround is to force */
+			/*    a reset by holding TMS high and pulsing TCK five times. */
+			/* 2. After switching to HW mode and resetting the JTAG state */
+			/*    machine to TLR, for Coresight topology, the first */
+			/*    DP CTRL/STAT read returns incorrect data. The workaround */
+			/*    is after switching to HW mode and resetting to TLR state, */
+			/*    perform a dummy DR read (not write) and discard the result. */
+			bits = 0x1F;
+			tms.num_bits = 5;
+			tms.bits = &bits;
+			ret = jtag_driver_execute_tms(&tms);
+			if (ret != ERROR_OK)
+				LOG_ERROR("JTAG DRIVER ERROR: couldn't reset JTAG state machine");
+			else {
+				LOG_INFO("JTAG DRIVER INFO: HW - Successfully reset JTAG state machine");
+				/* Bug Workaround - perform the dummy DR read */
+				xfer.type = JTAG_SDR_XFER;       /* Type is DR scan */
+				xfer.direction = JTAG_READ_XFER; /* Only perform DR read, no write */
+				xfer.length = (__u32)1;          /* Only a single bit is needed */
+				xfer.tdio = (__u64)(&data_buf);  /* Location to store read result */
+				xfer.endstate = JTAG_STATE_TLRESET;
+
+				ret_errno = ioctl(jtag_fd, JTAG_IOCXFER, &xfer);
+				if (ret_errno < 0) {
+					LOG_ERROR("JTAG DRIVER ERROR: scan failed");
+					ret = ERROR_FAIL;
+				} else
+					tap_set_state(TAP_RESET);
+			}
+		}
 	}
 
 	if (srst == 1) {
@@ -353,7 +421,6 @@ static int jtag_driver_execute_tms(struct tms_command *tms)
 
 	LOG_DEBUG_IO("JTAG DRIVER DEBUG: TMS: %d bits", tms_num_bits);
 
-	bitbang.tms = (__u8)0;
 	bitbang.tdi = (__u8)0;
 	bitbang.tdo = (__u8)0;
 
@@ -363,12 +430,13 @@ static int jtag_driver_execute_tms(struct tms_command *tms)
 	while ((j < tms_num_bits) && (ret == ERROR_OK)) {
 		this_len = tms_num_bits > 8 ? 8 : tms_num_bits;
 		for (i = 0; i < this_len && ret == ERROR_OK; i++) {
+			bitbang.tms = (__u8)((tms_bits >> i) & 0x1);
 			ret_errno = ioctl(jtag_fd, JTAG_IOCBITBANG, &bitbang);
 			if (ret_errno < 0) {
 				LOG_ERROR("JTAG DRIVER ERROR: execute_tms failed");
 				ret = ERROR_FAIL;
 			} else
-				tap_set_state(tap_state_transition(tap_get_state(), (tms_bits >> i) & 1));
+				tap_set_state(tap_state_transition(tap_get_state(), (tms_bits >> i) & 0x1));
 		}
 		j += this_len;
 		if (j < tms_num_bits) {
@@ -392,14 +460,14 @@ static int jtag_driver_execute_queue(void)
 			ret = jtag_driver_execute_scan(cmd->cmd.scan);
 			break;
 		case JTAG_TLR_RESET:
-			jtag_driver_execute_statemove(cmd->cmd.statemove);
+			ret = jtag_driver_reset(1, 0);
 			break;
 		case JTAG_RUNTEST:
 			ret = jtag_driver_execute_runtest(cmd->cmd.runtest->num_cycles,
 							cmd->cmd.runtest->end_state);
 			break;
 		case JTAG_RESET:
-			ret = jtag_driver_reset(cmd->cmd.reset->trst, cmd->cmd.reset->srst);
+			LOG_INFO("JTAG DRIVER INFO: Received deprecated JTAG_RESET command");
 			break;
 		case JTAG_PATHMOVE:
 			break;
@@ -447,16 +515,19 @@ static int jtag_driver_init(void)
 		ret = ERROR_FAIL;
 	} else {
 		jmode.feature = JTAG_XFER_MODE;
-		jmode.mode = JTAG_XFER_SW_MODE;  /* JTAG_XFER_HW_MODE or JTAG_XFER_SW_MODE */
+		if (jtag_hw_accel == 0)
+			jmode.mode = JTAG_XFER_SW_MODE;
+		else
+			jmode.mode = JTAG_XFER_HW_MODE;
+
 		ret_errno = ioctl(jtag_fd, JTAG_SIOCMODE, &jmode);
 		if (ret_errno < 0) {
 			LOG_ERROR("JTAG DRIVER ERROR: unable to set JTAG_XFER_MODE");
 			ret = ERROR_FAIL;
-		} else {
-			ret = jtag_driver_speed(jtag_get_speed_khz() * 1000);
-			if (ret != ERROR_OK)
-				LOG_ERROR("JTAG DRIVER ERROR: Unable to set TCK frequency");
-		}
+		} else if (jmode.mode == JTAG_XFER_HW_MODE)
+			LOG_INFO("JTAG DRIVER INFO: Hardware Acceleration mode enabled");
+		else
+			LOG_INFO("JTAG DRIVER INFO: Software mode enabled");
 	}
 
 	return ret;
@@ -473,12 +544,27 @@ static int jtag_driver_quit(void)
 
 COMMAND_HANDLER(jtag_driver_set_instance)
 {
-	if (CMD_ARGC == 0)
-		LOG_WARNING("JTAG DRIVER WARNING: Set the corresponding /dev/jtagX instance number");
-	else
+	if (CMD_ARGC > 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	else if (CMD_ARGC == 1)
 		COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], jtag_instance);
 
 	LOG_INFO("JTAG DRIVER INFO: Using /dev/jtag%u", jtag_instance);
+
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(jtag_driver_hw_accel)
+{
+	if (CMD_ARGC > 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	else if (CMD_ARGC == 1)
+		COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], jtag_hw_accel);
+
+	if (jtag_hw_accel == 0)
+		LOG_INFO("JTAG DRIVER INFO: Using Software mode");
+	else
+		LOG_INFO("JTAG DRIVER INFO: Using Hardware Acceleration mode");
 
 	return ERROR_OK;
 }
@@ -489,6 +575,13 @@ static const struct command_registration jtag_driver_command_handlers[] = {
 		.handler = &jtag_driver_set_instance,
 		.mode = COMMAND_CONFIG,
 		.help = "set the instance of the JTAG device",
+		.usage = "description_string",
+	},
+	{
+		.name = "jtag_driver_hw_accel",
+		.handler = &jtag_driver_hw_accel,
+		.mode = COMMAND_CONFIG,
+		.help = "enable or disable JTAG controller hardware acceleration",
 		.usage = "description_string",
 	},
 	COMMAND_REGISTRATION_DONE
@@ -507,7 +600,7 @@ struct adapter_driver jtag_driver_adapter_driver = {
 	.init = jtag_driver_init,
 	.quit = jtag_driver_quit,
 	.reset = jtag_driver_reset,
-	.speed = jtag_driver_speed,
+	.speed = jtag_driver_set_speed,
 	.khz = jtag_driver_khz,
 	.speed_div = jtag_driver_speed_div,
 	.jtag_ops = &jtag_driver_interface,

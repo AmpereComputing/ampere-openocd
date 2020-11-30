@@ -38,19 +38,25 @@
 #define SERVER_ADDRESS	"127.0.0.1"
 #define SERVER_PORT	5555
 
-int server_port = SERVER_PORT;
-char *server_address;
+static uint16_t server_port = SERVER_PORT;
+static char *server_address;
 
-int sockfd;
-struct sockaddr_in serv_addr;
+static int sockfd;
+static struct sockaddr_in serv_addr;
 
 static uint8_t *last_ir_buf;
 static int last_ir_num_bits;
 
 static int write_sock(char *buf, size_t len)
 {
+	if (buf == NULL) {
+		LOG_ERROR("%s: NULL 'buf' argument, file %s, line %d",
+			__func__, __FILE__, __LINE__);
+		return ERROR_FAIL;
+	}
 	if (write(sockfd, buf, len) != (ssize_t)len) {
-		perror("write");
+		LOG_ERROR("%s: %s, file %s, line %d", __func__,
+			strerror(errno), __FILE__, __LINE__);
 		return ERROR_FAIL;
 	}
 	return ERROR_OK;
@@ -58,12 +64,14 @@ static int write_sock(char *buf, size_t len)
 
 static int read_sock(char *buf, size_t len)
 {
-	int r;
-	int junk;	/* if pointer is NULL, dump the data */
-	r = read(sockfd, buf ? buf : (char *) &junk, len);
-	if (r != (ssize_t)len) {
-		perror("read()");
-		/*printf("read() returned %d\n", r); */
+	if (buf == NULL) {
+		LOG_ERROR("%s: NULL 'buf' argument, file %s, line %d",
+			__func__, __FILE__, __LINE__);
+		return ERROR_FAIL;
+	}
+	if (read(sockfd, buf, len) != (ssize_t)len) {
+		LOG_ERROR("%s: %s, file %s, line %d", __func__,
+			strerror(errno), __FILE__, __LINE__);
 		return ERROR_FAIL;
 	}
 	return ERROR_OK;
@@ -77,7 +85,26 @@ static int read_sock(char *buf, size_t len)
 static int jtag_dpi_reset(int trst, int srst)
 {
 	char *buf = "reset\n";
-	return write_sock(buf, strlen(buf));
+	int ret = ERROR_OK;
+
+	LOG_DEBUG_IO("JTAG DRIVER DEBUG: reset trst: %i srst %i", trst, srst);
+
+	if (trst == 1) {
+		/* reset the JTAG TAP controller */
+		ret = write_sock(buf, strlen(buf));
+		if (ret != ERROR_OK) {
+			LOG_ERROR("write_sock() fail, file %s, line %d",
+				__FILE__, __LINE__);
+		}
+	}
+
+	if (srst == 1) {
+		/* System target reset not supported */
+		LOG_ERROR("DPI SRST not supported");
+		ret = ERROR_FAIL;
+	}
+
+	return ret;
 }
 
 /**
@@ -92,112 +119,168 @@ static int jtag_dpi_scan(struct scan_command *cmd)
 {
 	char buf[20];
 	uint8_t *data_buf;
-	int num_bits, bytes, ret;
+	int num_bits, bytes;
+	int ret = ERROR_OK;
 
 	num_bits = jtag_build_buffer(cmd, &data_buf);
+	if (data_buf == NULL) {
+		LOG_ERROR("jtag_build_buffer call failed, data_buf == NULL, "
+			"file %s, line %d", __FILE__, __LINE__);
+		return ERROR_FAIL;
+	}
+
 	bytes = DIV_ROUND_UP(num_bits, 8);
 	if (cmd->ir_scan) {
-		if (last_ir_buf)
-			free(last_ir_buf);
-		last_ir_buf = calloc(bytes, 1);
+		free(last_ir_buf);
+		last_ir_buf = (uint8_t *)malloc(bytes * sizeof(uint8_t));
+		if (last_ir_buf == NULL) {
+			LOG_ERROR("%s: malloc fail, file %s, line %d",
+				__func__, __FILE__, __LINE__);
+			ret = ERROR_FAIL;
+			goto out;
+		}
 		memcpy(last_ir_buf, data_buf, bytes);
 		last_ir_num_bits = num_bits;
 	}
-	snprintf(buf, sizeof(buf), "%s %u\n", cmd->ir_scan ? "ib" : "db", num_bits);
-	ret = write_sock(buf, strlen(buf)) || write_sock((char *)data_buf, bytes) ||
-				read_sock((char *)data_buf, bytes);
-	if (ret)
+	snprintf(buf, sizeof(buf), "%s %d\n", cmd->ir_scan ? "ib" : "db", num_bits);
+	ret = write_sock(buf, strlen(buf));
+	if (ret != ERROR_OK) {
+		LOG_ERROR("write_sock() fail, file %s, line %d",
+			__FILE__, __LINE__);
 		goto out;
-	ret |= jtag_read_buffer(data_buf, cmd);
+	}
+	ret = write_sock((char *)data_buf, bytes);
+	if (ret != ERROR_OK) {
+		LOG_ERROR("write_sock() fail, file %s, line %d",
+			__FILE__, __LINE__);
+		goto out;
+	}
+	ret = read_sock((char *)data_buf, bytes);
+	if (ret != ERROR_OK) {
+		LOG_ERROR("read_sock() fail, file %s, line %d",
+			__FILE__, __LINE__);
+		goto out;
+	}
+
+	ret = jtag_read_buffer(data_buf, cmd);
+	if (ret != ERROR_OK) {
+		LOG_ERROR("jtag_read_buffer() fail, file %s, line %d",
+			__FILE__, __LINE__);
+		goto out;
+	}
+
 out:
 	free(data_buf);
-	return ERROR_OK;
+	return ret;
 }
 
-static int jtag_dpi_runtest(int cycles, tap_state_t state)
+static int jtag_dpi_runtest(int cycles)
 {
 	char buf[20];
-	uint8_t *data_buf = last_ir_buf, *junk;
-	int num_bits = last_ir_num_bits, bytes, ret;
-	ret = ERROR_OK;
+	uint8_t *data_buf = last_ir_buf, *read_scan;
+	int num_bits = last_ir_num_bits, bytes;
+	int ret = ERROR_OK;
 
-	if (!data_buf || !num_bits)
+	if (data_buf == NULL) {
+		LOG_ERROR("%s: NULL 'data_buf' argument, file %s, line %d",
+			__func__, __FILE__, __LINE__);
 		return ERROR_FAIL;
+	}
+	if (num_bits <= 0) {
+		LOG_ERROR("%s: 'num_bits' invalid value, file %s, line %d",
+			__func__, __FILE__, __LINE__);
+		return ERROR_FAIL;
+	}
+
 	bytes = DIV_ROUND_UP(num_bits, 8);
-	junk = malloc(bytes);
-	if (!junk)
+	read_scan = (uint8_t *)malloc(bytes * sizeof(uint8_t));
+	if (read_scan == NULL) {
+		LOG_ERROR("%s: malloc fail, file %s, line %d",
+			__func__, __FILE__, __LINE__);
 		return ERROR_FAIL;
-	snprintf(buf, sizeof(buf), "%s %u\n", "ib", num_bits);
+	}
+	snprintf(buf, sizeof(buf), "ib %d\n", num_bits);
 	while (cycles > 0) {
-		ret = write_sock(buf, strlen(buf)) || write_sock((char *)data_buf, bytes) ||
-			read_sock((char *)junk, bytes);
+		ret = write_sock(buf, strlen(buf));
+		if (ret != ERROR_OK) {
+			LOG_ERROR("write_sock() fail, file %s, line %d",
+				__FILE__, __LINE__);
+			goto out;
+		}
+		ret = write_sock((char *)data_buf, bytes);
+		if (ret != ERROR_OK) {
+			LOG_ERROR("write_sock() fail, file %s, line %d",
+				__FILE__, __LINE__);
+			goto out;
+		}
+		ret = read_sock((char *)read_scan, bytes);
+		if (ret != ERROR_OK) {
+			LOG_ERROR("read_sock() fail, file %s, line %d",
+				__FILE__, __LINE__);
+			goto out;
+		}
+
 		cycles -= num_bits + 6;
 	}
-	free(junk);
-	return ret;
 
+out:
+	free(read_scan);
+	return ret;
 }
 
 static int jtag_dpi_stableclocks(int cycles)
 {
-	return jtag_dpi_runtest(cycles, TAP_IDLE);
+	return jtag_dpi_runtest(cycles);
 }
 
 static int jtag_dpi_execute_queue(void)
 {
 	struct jtag_command *cmd;
-	int retval = ERROR_OK;
+	int ret = ERROR_OK;
 
-	for (cmd = jtag_command_queue; retval == ERROR_OK && cmd != NULL;
+	for (cmd = jtag_command_queue; ret == ERROR_OK && cmd != NULL;
 	     cmd = cmd->next) {
 		switch (cmd->type) {
-		case JTAG_RESET:
-			retval = jtag_dpi_reset(cmd->cmd.reset->trst, cmd->cmd.reset->srst);
-			break;
 		case JTAG_RUNTEST:
-			/* wait cmd->cmd.runtest->num_cycles */
-			retval = jtag_dpi_runtest(cmd->cmd.runtest->num_cycles,
-						  cmd->cmd.runtest->end_state);
+			ret = jtag_dpi_runtest(cmd->cmd.runtest->num_cycles);
 			break;
 		case JTAG_STABLECLOCKS:
-			/* wait cmd->cmd.stableclocks->num_cycles */
-			retval = jtag_dpi_stableclocks(cmd->cmd.stableclocks->num_cycles);
+			ret = jtag_dpi_stableclocks(cmd->cmd.stableclocks->num_cycles);
 			break;
 		case JTAG_TLR_RESET:
-			/* retval = jtag_dpi_state_move(cmd->cmd.statemove->end_state); */
+			/* Enter Test-Logic-Reset state by asserting TRST */
+			if (cmd->cmd.statemove->end_state == TAP_RESET)
+				jtag_dpi_reset(1, 0);
 			break;
 		case JTAG_PATHMOVE:
 			/* unsupported */
-			/* retval = jtag_dpi_path_move(cmd->cmd.pathmove); */
 			break;
 		case JTAG_TMS:
 			/* unsupported */
-			/* retval = jtag_dpi_tms(cmd->cmd.tms); */
 			break;
 		case JTAG_SLEEP:
 			jtag_sleep(cmd->cmd.sleep->us);
 			break;
 		case JTAG_SCAN:
-			retval = jtag_dpi_scan(cmd->cmd.scan);
+			ret = jtag_dpi_scan(cmd->cmd.scan);
 			break;
 		default:
 			LOG_ERROR("BUG: unknown JTAG command type 0x%X",
 				  cmd->type);
-			retval = ERROR_FAIL;
+			ret = ERROR_FAIL;
 			break;
 		}
 	}
 
-	return retval;
+	return ret;
 }
 
 static int jtag_dpi_init(void)
 {
-	int flag = 1;
-
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (sockfd < 0) {
-		LOG_ERROR("Could not create socket");
+		LOG_ERROR("socket: %s, function %s, file %s, line %d",
+			strerror(errno), __func__, __FILE__, __LINE__);
 		return ERROR_FAIL;
 	}
 
@@ -206,8 +289,14 @@ static int jtag_dpi_init(void)
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_port = htons(server_port);
 
-	if (!server_address)
+	if (server_address == NULL) {
 		server_address = strdup(SERVER_ADDRESS);
+		if (server_address == NULL) {
+			LOG_ERROR("%s: strdup fail, file %s, line %d",
+				__func__, __FILE__, __LINE__);
+			return ERROR_FAIL;
+		}
+	}
 
 	serv_addr.sin_addr.s_addr = inet_addr(server_address);
 
@@ -218,17 +307,18 @@ static int jtag_dpi_init(void)
 
 	if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
 		close(sockfd);
-		LOG_ERROR("Can't connect to %s : %u", server_address, server_port);
-		return ERROR_COMMAND_CLOSE_CONNECTION;
+		LOG_ERROR("Can't connect to %s : %" PRIu16, server_address, server_port);
+		return ERROR_FAIL;
 	}
 	if (serv_addr.sin_addr.s_addr == htonl(INADDR_LOOPBACK)) {
-		/* This increases performance drematically for local
+		/* This increases performance dramatically for local
 		* connections, which is the most likely arrangement
 		* for a DPI connection. */
+		int flag = 1;
 		setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
 	}
 
-	LOG_INFO("Connection to %s : %u succeed", server_address, server_port);
+	LOG_INFO("Connection to %s : %" PRIu16 " succeed", server_address, server_port);
 
 	return ERROR_OK;
 }
@@ -236,32 +326,49 @@ static int jtag_dpi_init(void)
 static int jtag_dpi_quit(void)
 {
 	free(server_address);
+	server_address = NULL;
+
 	return close(sockfd);
 }
 
 COMMAND_HANDLER(jtag_dpi_set_port)
 {
-	if (CMD_ARGC == 0)
-		LOG_WARNING("You need to set a port number");
-	else
-		COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], server_port);
-
-	LOG_INFO("Set server port to %u", server_port);
+	if (CMD_ARGC > 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	else if (CMD_ARGC == 0)
+		LOG_INFO("Using server port %" PRIu16, server_port);
+	else {
+		COMMAND_PARSE_NUMBER(u16, CMD_ARGV[0], server_port);
+		LOG_INFO("Set server port to %" PRIu16, server_port);
+	}
 
 	return ERROR_OK;
 }
 
 COMMAND_HANDLER(jtag_dpi_set_address)
 {
-	free(server_address);
-
-	if (CMD_ARGC == 0) {
-		LOG_WARNING("You need to set an address");
-		server_address = strdup(SERVER_ADDRESS);
-	} else
+	if (CMD_ARGC > 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	else if (CMD_ARGC == 0) {
+		if (server_address == NULL) {
+			server_address = strdup(SERVER_ADDRESS);
+			if (server_address == NULL) {
+				LOG_ERROR("%s: strdup fail, file %s, line %d",
+					__func__, __FILE__, __LINE__);
+				return ERROR_FAIL;
+			}
+		}
+		LOG_INFO("Using server address %s", server_address);
+	} else {
+		free(server_address);
 		server_address = strdup(CMD_ARGV[0]);
-
-	LOG_INFO("Set server address to %s", server_address);
+		if (server_address == NULL) {
+			LOG_ERROR("%s: strdup fail, file %s, line %d",
+				__func__, __FILE__, __LINE__);
+			return ERROR_FAIL;
+		}
+		LOG_INFO("Set server address to %s", server_address);
+	}
 
 	return ERROR_OK;
 }
@@ -272,14 +379,14 @@ static const struct command_registration jtag_dpi_command_handlers[] = {
 		.handler = &jtag_dpi_set_port,
 		.mode = COMMAND_CONFIG,
 		.help = "set the port of the DPI server",
-		.usage = "description_string",
+		.usage = "[port]",
 	},
 	{
 		.name = "jtag_dpi_set_address",
 		.handler = &jtag_dpi_set_address,
 		.mode = COMMAND_CONFIG,
 		.help = "set the address of the DPI server",
-		.usage = "description_string",
+		.usage = "[address]",
 	},
 	COMMAND_REGISTRATION_DONE
 };
@@ -293,10 +400,8 @@ struct adapter_driver jtag_dpi_adapter_driver = {
 	.name = "jtag_dpi",
 	.transports = jtag_only,
 	.commands = jtag_dpi_command_handlers,
-
 	.init = jtag_dpi_init,
 	.quit = jtag_dpi_quit,
-
+	.reset = jtag_dpi_reset,
 	.jtag_ops = &jtag_dpi_interface,
 };
-

@@ -22,7 +22,7 @@ AH_BOTTOM([
 #include <helper/replacements.h>
 ])
 
-AC_LANG_C
+AC_LANG([C])
 AC_PROG_CC
 AC_PROG_CC_C99
 AM_PROG_CC_C_O
@@ -34,7 +34,7 @@ m4_defun([_LT_AC_LANG_CXX_CONFIG], [:])
 m4_defun([_LT_AC_LANG_F77_CONFIG], [:])
 m4_defun([_LT_AC_LANG_GCJ_CONFIG], [:])
 AC_DISABLE_SHARED
-AC_PROG_LIBTOOL
+LT_INIT
 AC_SUBST([LIBTOOL_DEPS])
 
 dnl configure checks required for Jim files (these are obsolete w/ C99)
@@ -127,7 +127,8 @@ m4_define([USB0_ADAPTERS],
 	[[armjtagew], [Olimex ARM-JTAG-EW Programmer], [ARMJTAGEW]]])
 
 m4_define([HIDAPI_ADAPTERS],
-	[[[cmsis_dap], [CMSIS-DAP Compliant Debugger], [CMSIS_DAP]]])
+	[[[cmsis_dap], [CMSIS-DAP Compliant Debugger], [CMSIS_DAP]],
+	[[nulink], [Nu-Link Programmer], [HLADAPTER_NULINK]]])
 
 m4_define([HIDAPI_USB1_ADAPTERS],
 	[[[kitprog], [Cypress KitProg Programmer], [KITPROG]]])
@@ -658,6 +659,15 @@ PKG_CHECK_MODULES([LIBUSB1], [libusb-1.0], [
 
 PKG_CHECK_MODULES([LIBUSB0], [libusb], [use_libusb0=yes], [use_libusb0=no])
 
+PKG_CHECK_MODULES([CAPSTONE], [capstone], [have_capstone=yes],
+	[have_capstone=no])
+
+AS_IF([test "x$have_capstone" = "xyes"], [
+  AC_DEFINE([HAVE_CAPSTONE], [1], [1 if you have captone disassembly framework.])
+], [
+  AC_DEFINE([HAVE_CAPSTONE], [0], [0 if you don't have captone disassembly framework.])
+])
+
 for hidapi_lib in hidapi hidapi-hidraw hidapi-libusb; do
 	PKG_CHECK_MODULES([HIDAPI],[$hidapi_lib],[
 		use_hidapi=yes
@@ -716,7 +726,7 @@ AS_IF([test "x$enable_linuxgpiod" != "xno"], [
   build_bitbang=yes
 ])
 
-AS_IF([test "x$enable_stlink" != "xno" -o "x$enable_ti_icdi" != "xno"], [
+AS_IF([test "x$enable_stlink" != "xno" -o "x$enable_ti_icdi" != "xno" -o "x$enable_nulink" != "xno"], [
 	AC_DEFINE([BUILD_HLADAPTER], [1], [1 if you want the High Level JTAG driver.])
 	AM_CONDITIONAL([HLADAPTER], [true])
 ], [
@@ -725,6 +735,7 @@ AS_IF([test "x$enable_stlink" != "xno" -o "x$enable_ti_icdi" != "xno"], [
 ])
 AM_CONDITIONAL([HLADAPTER_STLINK], [test "x$enable_stlink" != "xno"])
 AM_CONDITIONAL([HLADAPTER_ICDI], [test "x$enable_ti_icdi" != "xno"])
+AM_CONDITIONAL([HLADAPTER_NULINK], [test "x$enable_nulink" != "xno"])
 
 AS_IF([test "x$enable_jlink" != "xno"], [
   AS_IF([test "x$use_internal_libjaylink" = "xyes"], [
@@ -777,6 +788,7 @@ AM_CONDITIONAL([USE_LIBGPIOD], [test "x$use_libgpiod" = "xyes"])
 AM_CONDITIONAL([USE_HIDAPI], [test "x$use_hidapi" = "xyes"])
 AM_CONDITIONAL([USE_LIBJAYLINK], [test "x$use_libjaylink" = "xyes"])
 AM_CONDITIONAL([RSHIM], [test "x$build_rshim" = "xyes"])
+AM_CONDITIONAL([HAVE_CAPSTONE], [test "x$have_capstone" = "xyes"])
 
 AM_CONDITIONAL([MINIDRIVER], [test "x$build_minidriver" = "xyes"])
 AM_CONDITIONAL([MINIDRIVER_DUMMY], [test "x$build_minidriver_dummy" = "xyes"])

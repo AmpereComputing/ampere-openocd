@@ -25,6 +25,7 @@
 
 #include "breakpoints.h"
 #include "aarch64.h"
+#include "a64_disassembler.h"
 #include "register.h"
 #include "target_request.h"
 #include "target_type.h"
@@ -107,7 +108,7 @@ static int aarch64_restore_system_control_reg(struct target *target)
 			break;
 
 		default:
-			LOG_ERROR("cannot read system control register in this mode: (%s : 0x%" PRIx32 ")",
+			LOG_ERROR("cannot read system control register in this mode: (%s : 0x%x)",
 					armv8_mode_name(armv8->arm.core_mode), armv8->arm.core_mode);
 			return ERROR_FAIL;
 		}
@@ -182,7 +183,7 @@ static int aarch64_mmu_modify(struct target *target, int enable)
 		break;
 
 	default:
-		LOG_DEBUG("unknown cpu state 0x%" PRIx32, armv8->arm.core_mode);
+		LOG_DEBUG("unknown cpu state 0x%x", armv8->arm.core_mode);
 		break;
 	}
 
@@ -1044,7 +1045,7 @@ static int aarch64_post_debug_entry(struct target *target)
 		break;
 
 	default:
-		LOG_ERROR("cannot read system control register in this mode: (%s : 0x%" PRIx32 ")",
+		LOG_ERROR("cannot read system control register in this mode: (%s : 0x%x)",
 				armv8_mode_name(armv8->arm.core_mode), armv8->arm.core_mode);
 		return ERROR_FAIL;
 	}
@@ -2460,7 +2461,7 @@ static int aarch64_examine_first(struct target *target)
 	struct aarch64_common *aarch64 = target_to_aarch64(target);
 	struct armv8_common *armv8 = &aarch64->armv8_common;
 	struct adi_dap *swjdp = armv8->arm.dap;
-	struct aarch64_private_config *pc;
+	struct aarch64_private_config *pc = target->private_config;
 	int i;
 	int retval = ERROR_OK;
 	uint64_t debug, ttypr;
@@ -2468,23 +2469,28 @@ static int aarch64_examine_first(struct target *target)
 	uint32_t tmp0, tmp1, tmp2, tmp3;
 	debug = ttypr = cpuid = 0;
 
-	/* Search for the APB-AB - it is needed for access to debug registers */
-	if (armv8->debug_ap == NULL) {
+	if (pc == NULL)
+		return ERROR_FAIL;
+
+	if (pc->adi_config.ap_num == DP_APSEL_INVALID) {
+		/* Search for the APB-AB */
 		retval = dap_find_ap(swjdp, AP_TYPE_APB_AP, &armv8->debug_ap);
 		if (retval != ERROR_OK) {
 			LOG_ERROR("Could not find APB-AP for debug access");
 			return retval;
 		}
-
-		retval = mem_ap_init(armv8->debug_ap);
-		if (retval != ERROR_OK) {
-			LOG_ERROR("Could not initialize the APB-AP");
-			return retval;
-		}
-
-		if (!armv8->debug_ap->memaccess_tck)
-			armv8->debug_ap->memaccess_tck = 10;
+	} else {
+		armv8->debug_ap = dap_ap(swjdp, pc->adi_config.ap_num);
 	}
+
+	retval = mem_ap_init(armv8->debug_ap);
+	if (retval != ERROR_OK) {
+		LOG_ERROR("Could not initialize the APB-AP");
+		return retval;
+	}
+
+	if (!armv8->debug_ap->memaccess_tck)
+		armv8->debug_ap->memaccess_tck = 10;
 
 	if (!target->dbgbase_set) {
 		target_addr_t dbgbase;
@@ -2550,10 +2556,6 @@ static int aarch64_examine_first(struct target *target)
 	LOG_DEBUG("ttypr = 0x%08" PRIx64, ttypr);
 	LOG_DEBUG("debug = 0x%08" PRIx64, debug);
 
-	if (target->private_config == NULL)
-		return ERROR_FAIL;
-
-	pc = (struct aarch64_private_config *)target->private_config;
 	if (pc->cti == NULL)
 		return ERROR_FAIL;
 
@@ -2731,8 +2733,13 @@ static int aarch64_jim_configure(struct target *target, Jim_GetOptInfo *goi)
 	 * options, JIM_OK if it correctly parsed the topmost option
 	 * and JIM_ERR if an error occurred during parameter evaluation.
 	 * For JIM_CONTINUE, we check our own params.
+	 *
+	 * adi_jim_configure() assumes 'private_config' to point to
+	 * 'struct adi_private_config'. Override 'private_config'!
 	 */
+	target->private_config = &pc->adi_config;
 	e = adi_jim_configure(target, goi);
+	target->private_config = pc;
 	if (e != JIM_CONTINUE)
 		return e;
 
@@ -2798,7 +2805,6 @@ COMMAND_HANDLER(aarch64_handle_cache_info_command)
 			&armv8->armv8_mmu.armv8_cache);
 }
 
-
 COMMAND_HANDLER(aarch64_handle_dbginit_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
@@ -2808,6 +2814,39 @@ COMMAND_HANDLER(aarch64_handle_dbginit_command)
 	}
 
 	return aarch64_init_debug_access(target);
+}
+
+COMMAND_HANDLER(aarch64_handle_disassemble_command)
+{
+	struct target *target = get_current_target(CMD_CTX);
+
+	if (target == NULL) {
+		LOG_ERROR("No target selected");
+		return ERROR_FAIL;
+	}
+
+	struct aarch64_common *aarch64 = target_to_aarch64(target);
+
+	if (aarch64->common_magic != AARCH64_COMMON_MAGIC) {
+		command_print(CMD, "current target isn't an AArch64");
+		return ERROR_FAIL;
+	}
+
+	int count = 1;
+	target_addr_t address;
+
+	switch (CMD_ARGC) {
+		case 2:
+			COMMAND_PARSE_NUMBER(int, CMD_ARGV[1], count);
+		/* FALL THROUGH */
+		case 1:
+			COMMAND_PARSE_ADDRESS(CMD_ARGV[0], address);
+			break;
+		default:
+			return ERROR_COMMAND_SYNTAX_ERROR;
+	}
+
+	return a64_disassemble(CMD, target, address, count);
 }
 
 COMMAND_HANDLER(aarch64_mask_interrupts_command)
@@ -3157,6 +3196,13 @@ static const struct command_registration aarch64_exec_command_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.help = "Initialize core debug",
 		.usage = "",
+	},
+	{
+		.name = "disassemble",
+		.handler = aarch64_handle_disassemble_command,
+		.mode = COMMAND_EXEC,
+		.help = "Disassemble instructions",
+		.usage = "address [count]",
 	},
 	{
 		.name = "maskisr",
