@@ -250,7 +250,7 @@ struct adi_dap {
 	/* Control config */
 	uint32_t dp_ctrl_stat;
 
-	struct adi_ap ap[256];
+	struct adi_ap ap[DP_APSEL_MAX + 1];
 
 	/* The current manually selected AP by the "dap apsel" command */
 	uint32_t apsel;
@@ -394,6 +394,7 @@ struct dap_ops {
 			const uint8_t *buffer, uint32_t size, uint32_t count, target_addr_t address);
 	int (*mem_ap_init)(struct adi_ap *ap);
 	int (*dp_init)(struct adi_dap *dap);
+	int (*dp_init_or_reconnect)(struct adi_dap *dap);
 	void (*invalidate_cache)(struct adi_dap *dap);
 	int (*get_debugbase)(struct adi_ap *ap,
 				target_addr_t *dbgbase, uint32_t *apid);
@@ -615,6 +616,10 @@ static inline int dap_dp_init(struct adi_dap *dap)
 {
 	return dap->dap_ops->dp_init(dap);
 }
+static inline int dap_dp_init_or_reconnect(struct adi_dap *dap)
+{
+	return dap->dap_ops->dp_init_or_reconnect(dap);
+}
 static inline int mem_ap_init(struct adi_ap *ap)
 {
 	return ap->dap->dap_ops->mem_ap_init(ap);
@@ -682,5 +687,15 @@ struct adi_private_config {
 
 extern int adi_verify_config(struct adi_private_config *pc);
 extern int adi_jim_configure(struct target *target, Jim_GetOptInfo *goi);
+
+struct adi_mem_ap_spot {
+	struct adi_dap *dap;
+	int ap_num;
+	uint32_t base;
+};
+
+extern int adi_mem_ap_spot_init(struct adi_mem_ap_spot *p);
+extern int adi_jim_mem_ap_spot_configure(struct adi_mem_ap_spot *cfg,
+		Jim_GetOptInfo *goi);
 
 #endif /* OPENOCD_TARGET_ARM_ADI_H */

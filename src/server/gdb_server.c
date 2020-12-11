@@ -1189,7 +1189,7 @@ static int gdb_get_registers_packet(struct connection *connection,
 		return gdb_error(connection, retval);
 
 	for (i = 0; i < reg_list_size; i++) {
-		if (reg_list[i] == NULL || reg_list[i]->exist == false)
+		if (reg_list[i] == NULL || reg_list[i]->exist == false || reg_list[i]->hidden)
 			continue;
 		reg_packet_size += DIV_ROUND_UP(reg_list[i]->size, 8) * 2;
 	}
@@ -1203,7 +1203,7 @@ static int gdb_get_registers_packet(struct connection *connection,
 	reg_packet_p = reg_packet;
 
 	for (i = 0; i < reg_list_size; i++) {
-		if (reg_list[i] == NULL || reg_list[i]->exist == false)
+		if (reg_list[i] == NULL || reg_list[i]->exist == false || reg_list[i]->hidden)
 			continue;
 		if (!reg_list[i]->valid) {
 			retval = reg_list[i]->type->get(reg_list[i]);
@@ -1332,7 +1332,7 @@ static int gdb_get_register_packet(struct connection *connection,
 		}
 	}
 
-	reg_packet = malloc(DIV_ROUND_UP(reg_list[reg_num]->size, 8) * 2 + 1); /* plus one for string termination null */
+	reg_packet = calloc(DIV_ROUND_UP(reg_list[reg_num]->size, 8) * 2 + 1, 1); /* plus one for string termination null */
 
 	gdb_str_to_target(target, reg_packet, reg_list[reg_num]);
 
@@ -2176,7 +2176,7 @@ static int get_reg_features_list(struct target *target, char const **feature_lis
 	*feature_list = calloc(1, sizeof(char *));
 
 	for (int i = 0; i < reg_list_size; i++) {
-		if (reg_list[i]->exist == false)
+		if (reg_list[i]->exist == false || reg_list[i]->hidden)
 			continue;
 
 		if (reg_list[i]->feature != NULL
@@ -2270,7 +2270,7 @@ static int gdb_generate_target_description(struct target *target, char **tdesc_o
 			int i;
 			for (i = 0; i < reg_list_size; i++) {
 
-				if (reg_list[i]->exist == false)
+				if (reg_list[i]->exist == false || reg_list[i]->hidden)
 					continue;
 
 				if (strcmp(reg_list[i]->feature->name, features[current_feature]))
@@ -3479,8 +3479,8 @@ static int gdb_target_start(struct target *target, const char *port)
 	target->gdb_service = gdb_service;
 
 	ret = add_service("gdb",
-			port, 1, &gdb_new_connection, &gdb_input,
-			&gdb_connection_closed, gdb_service);
+			port, target->gdb_max_connections, &gdb_new_connection, &gdb_input,
+			&gdb_connection_closed, gdb_service, NULL);
 	/* initialize all targets gdb service with the same pointer */
 	{
 		struct target_list *head;

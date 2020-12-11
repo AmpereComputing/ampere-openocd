@@ -249,7 +249,7 @@ static int jtag_driver_execute_scan(struct scan_command *scan)
 	}
 
 	xfer.length = (__u32)num_bits;
-	xfer.tdio = (__u64)data_buf;
+	xfer.tdio = (__u64)(uintptr_t)data_buf;
 	xfer.endstate = state_conversion(scan->end_state);
 
 	ret_errno = ioctl(jtag_fd, JTAG_IOCXFER, &xfer);
@@ -376,7 +376,7 @@ static int jtag_driver_reset(int trst, int srst)
 				xfer.type = JTAG_SDR_XFER;       /* Type is DR scan */
 				xfer.direction = JTAG_READ_XFER; /* Only perform DR read, no write */
 				xfer.length = (__u32)1;          /* Only a single bit is needed */
-				xfer.tdio = (__u64)(&data_buf);  /* Location to store read result */
+				xfer.tdio = (__u64)(uintptr_t)(&data_buf);  /* Location to store read result */
 				xfer.endstate = JTAG_STATE_TLRESET;
 
 				ret_errno = ioctl(jtag_fd, JTAG_IOCXFER, &xfer);

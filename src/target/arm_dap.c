@@ -392,24 +392,19 @@ COMMAND_HANDLER(handle_dap_info_command)
 	struct adi_dap *dap = adi_get_dap(CMD_DATA);
 	uint32_t apsel;
 
-	if (dap == NULL) {
-		LOG_ERROR("DAP instance not available. Probably a HLA target...");
-		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
-	}
-
 	switch (CMD_ARGC) {
-		case 0:
-			apsel = dap->apsel;
-			break;
-		case 1:
-			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], apsel);
-			if (apsel > DP_APSEL_MAX) {
-				command_print(CMD, "Invalid AP number");
-				return ERROR_COMMAND_ARGUMENT_INVALID;
-			}
-			break;
-		default:
-			return ERROR_COMMAND_SYNTAX_ERROR;
+	case 0:
+		apsel = dap->apsel;
+		break;
+	case 1:
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], apsel);
+		if (apsel > DP_APSEL_MAX) {
+			command_print(CMD, "Invalid AP number");
+			return ERROR_COMMAND_ARGUMENT_INVALID;
+		}
+		break;
+	default:
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	return dap->dap_ops->dap_info_command(CMD, &dap->ap[apsel]);
@@ -423,7 +418,7 @@ COMMAND_HANDLER(dap_apsel_command)
 
 	switch (CMD_ARGC) {
 	case 0:
-		command_print(CMD, "%" PRIi32, dap->apsel);
+		command_print(CMD, "%" PRIu32, dap->apsel);
 		return ERROR_OK;
 	case 1:
 		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], apsel);
@@ -486,24 +481,9 @@ COMMAND_HANDLER(dap_memaccess_command)
 COMMAND_HANDLER(dap_ti_be_32_quirks_command)
 {
 	struct adi_dap *dap = adi_get_dap(CMD_DATA);
-	uint32_t enable = dap->ti_be_32_quirks;
 
-	switch (CMD_ARGC) {
-	case 0:
-		break;
-	case 1:
-		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], enable);
-		if (enable > 1)
-			return ERROR_COMMAND_SYNTAX_ERROR;
-		break;
-	default:
-		return ERROR_COMMAND_SYNTAX_ERROR;
-	}
-	dap->ti_be_32_quirks = enable;
-	command_print(CMD, "TI BE-32 quirks mode %s",
-		enable ? "enabled" : "disabled");
-
-	return 0;
+	return CALL_COMMAND_HANDLER(handle_command_parse_bool, &dap->ti_be_32_quirks,
+		"TI BE-32 quirks mode");
 }
 
 static const struct command_registration dap_subcommand_handlers[] = {
