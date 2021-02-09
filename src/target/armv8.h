@@ -198,7 +198,7 @@ struct armv8_common {
 
 	/* Core Debug Unit */
 	struct arm_dpm dpm;
-	uint32_t debug_base;
+	target_addr_t debug_base;
 	struct adiv5_ap *debug_ap;
 
 	enum arm_mode max_aarch64_el;
