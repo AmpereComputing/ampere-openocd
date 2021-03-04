@@ -381,6 +381,7 @@ extern struct adapter_driver hl_adapter_driver;
 extern struct adapter_driver imx_gpio_adapter_driver;
 extern struct adapter_driver jlink_adapter_driver;
 extern struct adapter_driver jtag_dpi_adapter_driver;
+extern struct adapter_driver jtag_driver_adapter_driver;
 extern struct adapter_driver jtag_vpi_adapter_driver;
 extern struct adapter_driver kitprog_adapter_driver;
 extern struct adapter_driver linuxgpiod_adapter_driver;
