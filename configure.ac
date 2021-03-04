@@ -350,6 +350,10 @@ AC_ARG_ENABLE([parport_giveio],
       [Enable use of giveio for parport (for CygWin only)]),
     [parport_use_giveio=$enableval], [parport_use_giveio=])
 
+AC_ARG_ENABLE([jtag_driver],
+  AS_HELP_STRING([--enable-jtag_driver], [Enable building support for JTAG DRIVER]),
+  [build_jtag_driver=$enableval], [build_jtag_driver=yes])
+
 AS_CASE(["${host_cpu}"],
   [arm*|aarch64], [
     AC_ARG_ENABLE([bcm2835gpio],
@@ -576,6 +580,12 @@ AS_IF([test "x$parport_use_giveio" = "xyes"], [
   AC_DEFINE([PARPORT_USE_GIVEIO], [0], [0 if you don't want parport to use giveio.])
 ])
 
+AS_IF([test "x$build_jtag_driver" = "xyes"], [
+  AC_DEFINE([BUILD_JTAG_DRIVER], [1], [1 if you want JTAG DRIVER.])
+], [
+  AC_DEFINE([BUILD_JTAG_DRIVER], [0], [0 if you don't want JTAG DRIVER.])
+])
+
 AS_IF([test "x$build_gw16012" = "xyes"], [
   AC_DEFINE([BUILD_GW16012], [1], [1 if you want the Gateworks GW16012 driver.])
 ], [
@@ -764,6 +774,7 @@ AM_CONDITIONAL([BCM2835GPIO], [test "x$build_bcm2835gpio" = "xyes"])
 AM_CONDITIONAL([IMX_GPIO], [test "x$build_imx_gpio" = "xyes"])
 AM_CONDITIONAL([AM335XGPIO], [test "x$build_am335xgpio" = "xyes"])
 AM_CONDITIONAL([BITBANG], [test "x$build_bitbang" = "xyes"])
+AM_CONDITIONAL([JTAG_DRIVER], [test "x$build_jtag_driver" = "xyes"])
 AM_CONDITIONAL([USB_BLASTER_DRIVER], [test "x$enable_usb_blaster" != "xno" -o "x$enable_usb_blaster_2" != "xno"])
 AM_CONDITIONAL([GW16012], [test "x$build_gw16012" = "xyes"])
 AM_CONDITIONAL([USE_LIBUSB1], [test "x$use_libusb1" = "xyes"])
