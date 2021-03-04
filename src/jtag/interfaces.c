@@ -55,6 +55,9 @@ extern struct adapter_driver vdebug_adapter_driver;
 #if BUILD_JTAG_DPI == 1
 extern struct adapter_driver jtag_dpi_adapter_driver;
 #endif
+#if BUILD_JTAG_DRIVER == 1
+extern struct adapter_driver jtag_driver_adapter_driver;
+#endif
 #if BUILD_FT232R == 1
 extern struct adapter_driver ft232r_adapter_driver;
 #endif
@@ -174,6 +177,9 @@ struct adapter_driver *adapter_drivers[] = {
 #endif
 #if BUILD_JTAG_DPI == 1
 		&jtag_dpi_adapter_driver,
+#endif
+#if BUILD_JTAG_DRIVER == 1
+		&jtag_driver_adapter_driver,
 #endif
 #if BUILD_FT232R == 1
 		&ft232r_adapter_driver,
