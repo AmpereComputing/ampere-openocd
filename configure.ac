@@ -282,6 +282,10 @@ AC_ARG_ENABLE([jtag_dpi],
   AS_HELP_STRING([--enable-jtag_dpi], [Enable building support for JTAG DPI]),
   [build_jtag_dpi=$enableval], [build_jtag_dpi=no])
 
+AC_ARG_ENABLE([jtag_driver],
+  AS_HELP_STRING([--enable-jtag_driver], [Enable building support for JTAG DRIVER]),
+  [build_jtag_driver=$enableval], [build_jtag_driver=yes])
+
 AC_ARG_ENABLE([amtjtagaccel],
   AS_HELP_STRING([--enable-amtjtagaccel], [Enable building the Amontec JTAG-Accelerator driver]),
   [build_amtjtagaccel=$enableval], [build_amtjtagaccel=no])
@@ -529,6 +533,11 @@ AS_IF([test "x$build_jtag_dpi" = "xyes"], [
   AC_DEFINE([BUILD_JTAG_DPI], [0], [0 if you don't want JTAG DPI.])
 ])
 
+AS_IF([test "x$build_jtag_driver" = "xyes"], [
+  AC_DEFINE([BUILD_JTAG_DRIVER], [1], [1 if you want JTAG DRIVER.])
+], [
+  AC_DEFINE([BUILD_JTAG_DRIVER], [0], [0 if you don't want JTAG DRIVER.])
+])
 
 AS_IF([test "x$build_amtjtagaccel" = "xyes"], [
   AC_DEFINE([BUILD_AMTJTAGACCEL], [1], [1 if you want the Amontec JTAG-Accelerator driver.])
