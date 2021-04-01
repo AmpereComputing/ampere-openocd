@@ -84,24 +84,31 @@ static int read_sock(char *buf, size_t len)
  */
 static int jtag_dpi_reset(int trst, int srst)
 {
-	char *buf = "reset\n";
+	char *buf;
 	int ret = ERROR_OK;
 
 	LOG_DEBUG_IO("JTAG DRIVER DEBUG: reset trst: %i srst %i", trst, srst);
 
-	if (trst == 1) {
+	if (trst) {
 		/* reset the JTAG TAP controller */
+		buf = "reset\n";
 		ret = write_sock(buf, strlen(buf));
 		if (ret != ERROR_OK) {
-			LOG_ERROR("write_sock() fail, file %s, line %d",
+			LOG_ERROR("write_sock() fail for TRST, file %s, line %d",
 				__FILE__, __LINE__);
 		}
 	}
 
-	if (srst == 1) {
-		/* System target reset not supported */
-		LOG_ERROR("DPI SRST not supported");
-		ret = ERROR_FAIL;
+	if (srst)
+		buf = "srst_assert\n";
+	else
+		buf = "srst_deassert\n";
+
+	/* Handle SRSTn signal */
+	ret = write_sock(buf, strlen(buf));
+	if (ret != ERROR_OK) {
+		LOG_ERROR("write_sock() fail for SRST, file %s, line %d",
+			__FILE__, __LINE__);
 	}
 
 	return ret;
