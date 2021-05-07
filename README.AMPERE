@@ -1,0 +1,26 @@
+This Docker container was built by Ampere Computing using an internal and
+proprietary build process. This container was built using sources from open source
+as well as closed source projects.
+
+The base layer of this container was built using the Ubuntu 18.04 image
+as hosted by DockerHub.
+
+A number of packages were installed using the standard apt package manager. These
+can be discovered using the ```sudo apt list --installed``` command (or equivalent).
+
+In addition to packages installed via the standard Ubuntu package repository,
+the following projects were directly added to this container:
+
+ - OpenOCD With Ampere Patches
+   Placed at location: /home/openocd/openocd/, /home/openocd/openocd/patches/
+
+ - Ampere OpenOCD Dockerfile
+   Placed at location: /home/openocd/openocd/Dockerfile
+   This file is distributed under the BSD-3-Clause license. Full license text for the
+   BSD-3-Clause license can be found at /home/openocd/openocd/LICENSES/preferred/BSD-3-Clause
+
+ - Arm GNU Toolchain
+   Placed at locations: /usr/bin, /usr/include/gdb, /usr/share/, /usr/share/gdb/,
+   /usr/share/doc/gdb/, /usr/share/info/
+   This toolchain is included without modifications and as distributed by Arm at
+   this page: https://developer.arm.com/tools-and-software/open-source-software/developer-tools/gnu-toolchain/gnu-a/downloads/10-3-2021-07
