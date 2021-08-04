@@ -259,6 +259,11 @@ struct adiv5_ap {
 
 	/* MEM AP configuration register indicating LPAE support */
 	uint32_t cfg_reg;
+
+	/* references counter:
+	 * BIT(0) is set only for value changed during config phase;
+	 * normal increment/decrement in steps of +2/-2 */
+	unsigned int refcount;
 };
 
 
@@ -486,6 +491,10 @@ static inline int dap_queue_ap_read(struct adiv5_ap *ap,
 		unsigned reg, uint32_t *data)
 {
 	assert(ap->dap->ops);
+	if (ap->refcount == 0) {
+		ap->refcount = 1;
+		LOG_ERROR("BUG: refcount AP#%" PRIu8 " used without get", ap->ap_num);
+	}
 	return ap->dap->ops->queue_ap_read(ap, reg, data);
 }
 
@@ -502,6 +511,10 @@ static inline int dap_queue_ap_write(struct adiv5_ap *ap,
 		unsigned reg, uint32_t data)
 {
 	assert(ap->dap->ops);
+	if (ap->refcount == 0) {
+		ap->refcount = 1;
+		LOG_ERROR("BUG: refcount AP#%" PRIu8 " used without get", ap->ap_num);
+	}
 	return ap->dap->ops->queue_ap_write(ap, reg, data);
 }
 
@@ -623,15 +636,19 @@ void dap_invalidate_cache(struct adiv5_dap *dap);
 int dap_get_debugbase(struct adiv5_ap *ap,
 			target_addr_t *dbgbase, uint32_t *apid);
 
-/* Probe Access Ports to find a particular type */
-int dap_find_ap(struct adiv5_dap *dap,
+/* Probe Access Ports to find a particular type. Increment AP refcount */
+int dap_find_get_ap(struct adiv5_dap *dap,
 			enum ap_type type_to_find,
 			struct adiv5_ap **ap_out);
 
-static inline struct adiv5_ap *dap_ap(struct adiv5_dap *dap, uint8_t ap_num)
-{
-	return &dap->ap[ap_num];
-}
+/* Return AP with specified ap_num. Increment AP refcount */
+struct adiv5_ap *dap_get_ap(struct adiv5_dap *dap, unsigned int ap_num);
+
+/* Return AP with specified ap_num. Increment AP refcount and keep it non-zero */
+struct adiv5_ap *dap_get_config_ap(struct adiv5_dap *dap, unsigned int ap_num);
+
+/* Decrement AP refcount and release the AP when refcount reaches zero */
+int dap_put_ap(struct adiv5_ap *ap);
 
 /** Check if SWD multidrop configuration is valid */
 static inline bool dap_is_multidrop(struct adiv5_dap *dap)
