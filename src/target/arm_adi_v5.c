@@ -1184,32 +1184,56 @@ int adiv6_dap_read_baseptr(struct command_invocation *cmd, struct adiv5_dap *dap
 int dap_lookup_cs_component(struct adiv5_ap *ap,
 			target_addr_t dbgbase, uint8_t type, target_addr_t *addr, int32_t *idx)
 {
-	uint32_t cidr1, romentry;
+	uint32_t devid_reg, cidr1;
 	unsigned int entry_offset = 0, max_entry_offset;
-	target_addr_t component_base;
+	target_addr_t component_base, romentry;
+	bool rom_entries_64bits;
 	int retval;
 
+	retval = mem_ap_read_atomic_u32(ap, dbgbase + ARM_CS_C9_DEVID, &devid_reg);
+	if (retval != ERROR_OK)
+		return retval;
 	retval = mem_ap_read_atomic_u32(ap, dbgbase + ARM_CS_CIDR1, &cidr1);
 	if (retval != ERROR_OK)
 		return retval;
 
 	unsigned int class = (cidr1 & ARM_CS_CIDR1_CLASS_MASK) >> ARM_CS_CIDR1_CLASS_SHIFT;
-	if (class == ARM_CS_CLASS_0X1_ROM_TABLE)
+	if (class == ARM_CS_CLASS_0X1_ROM_TABLE) {
+		rom_entries_64bits = false;
 		max_entry_offset = 0xF00; /* class 1 entry maximum count 960 */
-	else
+	} else {
+		rom_entries_64bits = ((devid_reg & ARM_CS_C9_DEVID_FORMAT_MASK) == ARM_CS_C9_DEVID_FORMAT_64BIT);
 		max_entry_offset = 0x800; /* class 9 entry maximum count 512 */
+	}
 
 	dbgbase &= 0xFFFFFFFFFFFFF000ull;
 	*addr = 0;
 
 	do {
-		retval = mem_ap_read_atomic_u32(ap, dbgbase + entry_offset, &romentry);
+		uint32_t romentry_low;
+		retval = mem_ap_read_atomic_u32(ap, dbgbase + entry_offset, &romentry_low);
 		if (retval != ERROR_OK)
 			return retval;
+		entry_offset += 4;
 
-		component_base = dbgbase + (int32_t)(romentry & ARM_CS_ROMENTRY_OFFSET_MASK);
+		if (rom_entries_64bits) {
+			uint32_t romentry_high;
+			retval = mem_ap_read_atomic_u32(ap, dbgbase + entry_offset, &romentry_high);
+			if (retval != ERROR_OK)
+				return retval;
+			entry_offset += 4;
 
-		if (romentry & ARM_CS_ROMENTRY_PRESENT) {
+			romentry = (((uint64_t)romentry_high) << 32) | romentry_low;
+			component_base = dbgbase +
+				((((uint64_t)romentry_high) << 32) | (romentry_low & ARM_CS_ROMENTRY_OFFSET_MASK));
+		} else {
+			romentry = romentry_low;
+			component_base = dbgbase + (int32_t)(romentry_low & ARM_CS_ROMENTRY_OFFSET_MASK);
+			if (!is_64bit_ap(ap))
+				component_base = (uint32_t)component_base;
+		}
+
+		if (romentry_low & ARM_CS_ROMENTRY_PRESENT) {
 			retval = mem_ap_read_atomic_u32(ap, component_base + ARM_CS_CIDR1, &cidr1);
 			if (retval != ERROR_OK) {
 				LOG_ERROR("Can't read component with base address " TARGET_ADDR_FMT
@@ -1252,8 +1276,7 @@ int dap_lookup_cs_component(struct adiv5_ap *ap,
 					return retval;
 			}
 		}
-		entry_offset += 4;
-	} while ((romentry > 0) && (entry_offset < max_entry_offset));
+	} while (romentry && (entry_offset < max_entry_offset));
 
 	if (!*addr)
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
@@ -1617,6 +1640,7 @@ static int dap_rom_display(struct command_invocation *cmd,
 				struct adiv5_ap *ap, target_addr_t dbgbase, int depth)
 {
 	unsigned int rom_num_entries;
+	bool rom_entries_64bits;
 	int retval;
 	uint64_t pid;
 	uint32_t cid;
@@ -1681,6 +1705,7 @@ static int dap_rom_display(struct command_invocation *cmd,
 		else
 			command_print(cmd, "\t\tMEMTYPE system memory not present: dedicated debug bus");
 
+		rom_entries_64bits = false;
 		rom_num_entries = 960;
 	} else if (class == ARM_CS_CLASS_0X9_CS_COMPONENT) {
 		uint32_t devtype;
@@ -1711,24 +1736,53 @@ static int dap_rom_display(struct command_invocation *cmd,
 		if ((devarch & DEVARCH_ID_MASK) != DEVARCH_ROM_C_0X9)
 			return ERROR_OK;
 
-		rom_num_entries = 512;
+		uint32_t devid;
+		retval = mem_ap_read_atomic_u32(ap, base_addr + ARM_CS_C9_DEVID, &devid);
+		if (retval != ERROR_OK)
+			return retval;
+
+		rom_entries_64bits = ((devid & ARM_CS_C9_DEVID_FORMAT_MASK) == ARM_CS_C9_DEVID_FORMAT_64BIT);
+		if (rom_entries_64bits)
+			rom_num_entries = 256;
+		else
+			rom_num_entries = 512;
 	} else {
 		/* Class other than 0x1 and 0x9 */
 		return ERROR_OK;
 	}
 
 	/* Read ROM table entries from base address until we get 0x00000000 or reach the reserved area */
-	for (unsigned int entry_offset = 0; entry_offset < 4 * rom_num_entries; entry_offset += 4) {
-		uint32_t romentry;
-		retval = mem_ap_read_atomic_u32(ap, base_addr + entry_offset, &romentry);
+	unsigned int entry_offset = 0;
+	while (rom_num_entries--) {
+		int64_t romentry, component_base;
+		uint32_t romentry_low;
+		unsigned int saved_entry_offset = entry_offset;
+		retval = mem_ap_read_atomic_u32(ap, base_addr + entry_offset, &romentry_low);
 		if (retval != ERROR_OK)
 			return retval;
-		command_print(cmd, "\t%sROMTABLE[0x%x] = 0x%" PRIx32 "",
-				tabs, entry_offset, romentry);
-		if (romentry & ARM_CS_ROMENTRY_PRESENT) {
-			/* Recurse. "romentry" is signed */
-			retval = dap_rom_display(cmd, ap, base_addr + (int32_t)(romentry & ARM_CS_ROMENTRY_OFFSET_MASK),
-									 depth + 1);
+		entry_offset += 4;
+
+		if (rom_entries_64bits) {
+			uint32_t romentry_high;
+			retval = mem_ap_read_atomic_u32(ap, base_addr + entry_offset, &romentry_high);
+			if (retval != ERROR_OK)
+				return retval;
+			entry_offset += 4;
+			romentry = (((uint64_t)romentry_high) << 32) | romentry_low;
+			component_base = base_addr +
+				((((uint64_t)romentry_high) << 32) | (romentry_low & ARM_CS_ROMENTRY_OFFSET_MASK));
+		} else {
+			romentry = romentry_low;
+			/* "romentry" is signed */
+			component_base = base_addr + (int32_t)(romentry_low & ARM_CS_ROMENTRY_OFFSET_MASK);
+			if (!is_64bit_ap(ap))
+				component_base = (uint32_t)component_base;
+		}
+		command_print(cmd, "\t%sROMTABLE[0x%x] = 0x%" PRIx64, tabs, saved_entry_offset, romentry);
+
+		if (romentry_low & ARM_CS_ROMENTRY_PRESENT) {
+			/* Recurse */
+			retval = dap_rom_display(cmd, ap, component_base, depth + 1);
 			if (retval != ERROR_OK)
 				return retval;
 		} else if (romentry != 0) {
