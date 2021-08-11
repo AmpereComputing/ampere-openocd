@@ -495,7 +495,7 @@ COMMAND_HANDLER(handle_dap_info_command)
 		command_print(CMD, "Cannot get AP");
 		return ERROR_FAIL;
 	}
-	int retval = dap_info_command(CMD, ap);
+	int retval = dap_info_command(CMD, ap, 0);
 	dap_put_ap(ap);
 	return retval;
 }

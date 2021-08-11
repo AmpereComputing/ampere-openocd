@@ -1797,25 +1797,36 @@ static int dap_rom_display(struct command_invocation *cmd,
 }
 
 int dap_info_command(struct command_invocation *cmd,
-		struct adiv5_ap *ap)
+		struct adiv5_ap *ap, int depth)
 {
 	int retval;
 	uint32_t apid;
 	target_addr_t dbgbase;
 	target_addr_t dbgaddr;
+	char tabs[17] = "";
+
+	if (depth > 16) {
+		command_print(cmd, "\tTables too deep");
+		return ERROR_FAIL;
+	}
+
+	if (depth)
+		snprintf(tabs, sizeof(tabs), "\t[L%02d] ", depth);
+
+	command_print(cmd, "%sAP # 0x%" PRIx64, tabs, ap->ap_num);
 
 	/* Now we read ROM table ID registers, ref. ARM IHI 0029B sec  */
 	retval = dap_get_debugbase(ap, &dbgbase, &apid);
 	if (retval != ERROR_OK)
 		return retval;
 
-	command_print(cmd, "AP ID register 0x%8.8" PRIx32, apid);
+	command_print(cmd, "\t\tAP ID register 0x%8.8" PRIx32, apid);
 	if (apid == 0) {
-		command_print(cmd, "No AP found at this AP#0x%" PRIx64, ap->ap_num);
+		command_print(cmd, "\t\tNo AP found at this AP#0x%" PRIx64, ap->ap_num);
 		return ERROR_FAIL;
 	}
 
-	command_print(cmd, "\tType is %s", ap_type_to_description(apid & AP_TYPE_MASK));
+	command_print(cmd, "\t\tType is %s", ap_type_to_description(apid & AP_TYPE_MASK));
 
 	/* NOTE: a MEM-AP may have a single CoreSight component that's
 	 * not a ROM table ... or have no such components at all.
@@ -1828,17 +1839,17 @@ int dap_info_command(struct command_invocation *cmd,
 		else
 			dbgaddr = 0xFFFFFFFFul;
 
-		command_print(cmd, "MEM-AP BASE " TARGET_ADDR_FMT, dbgbase);
+		command_print(cmd, "%sMEM-AP BASE " TARGET_ADDR_FMT, tabs, dbgbase);
 
 		if (dbgbase == dbgaddr || (dbgbase & 0x3) == 0x2) {
-			command_print(cmd, "\tNo ROM table present");
+			command_print(cmd, "\t\tNo ROM table present");
 		} else {
 			if (dbgbase & 0x01)
-				command_print(cmd, "\tValid ROM table present");
+				command_print(cmd, "\t\tValid ROM table present");
 			else
-				command_print(cmd, "\tROM table in legacy format");
+				command_print(cmd, "\t\tROM table in legacy format");
 
-			dap_rom_display(cmd, ap, dbgbase & 0xFFFFFFFFFFFFF000ull, 0);
+			dap_rom_display(cmd, ap, dbgbase & 0xFFFFFFFFFFFFF000ull, depth);
 		}
 	}
 
@@ -2056,7 +2067,7 @@ COMMAND_HANDLER(handle_dap_info_command)
 		return ERROR_FAIL;
 	}
 
-	int retval = dap_info_command(CMD, ap);
+	int retval = dap_info_command(CMD, ap, 0);
 	dap_put_ap(ap);
 	return retval;
 }

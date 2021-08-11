@@ -742,7 +742,7 @@ struct arm_dap_object;
 extern struct adiv5_dap *dap_instance_by_jim_obj(Jim_Interp *interp, Jim_Obj *o);
 extern struct adiv5_dap *adiv5_get_dap(struct arm_dap_object *obj);
 extern int dap_info_command(struct command_invocation *cmd,
-					 struct adiv5_ap *ap);
+					 struct adiv5_ap *ap, int depth);
 extern int dap_register_commands(struct command_context *cmd_ctx);
 extern const char *adiv5_dap_name(struct adiv5_dap *self);
 extern const struct swd_driver *adiv5_dap_swd_driver(struct adiv5_dap *self);
