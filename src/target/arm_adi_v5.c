@@ -917,16 +917,45 @@ static const char *ap_type_to_description(enum ap_type type)
 	return "Unknown";
 }
 
+bool is_ap_num_valid(struct adiv5_dap *dap, uint64_t ap_num)
+{
+	if (!dap)
+		return false;
+
+	/* no autodetection, by now, so uninitialized is equivalent to ADIv5 for
+	 * backward compatibility */
+	if (!is_adiv6(dap)) {
+		if (ap_num > DP_APSEL_MAX)
+			return false;
+		return true;
+	}
+
+	if (is_adiv6(dap)) {
+		if (ap_num & 0x0fffULL)
+			return false;
+		if (dap->asize != 0)
+			if (ap_num & ((~0ULL) << dap->asize))
+				return false;
+		return true;
+	}
+
+	return false;
+}
+
 /*
  * This function checks the ID for each access port to find the requested Access Port type
  * It also calls dap_get_ap() to increment the AP refcount
  */
 int dap_find_get_ap(struct adiv5_dap *dap, enum ap_type type_to_find, struct adiv5_ap **ap_out)
 {
-	int ap_num;
+	if (is_adiv6(dap)) {
+		/* TODO: scan the ROM table and detect the AP available */
+		LOG_DEBUG("On ADIv6 we cannot scan all the possible AP");
+		return ERROR_FAIL;
+	}
 
 	/* Maximum AP number is 255 since the SELECT register is 8 bits */
-	for (ap_num = 0; ap_num <= DP_APSEL_MAX; ap_num++) {
+	for (unsigned int ap_num = 0; ap_num <= DP_APSEL_MAX; ap_num++) {
 		struct adiv5_ap *ap = dap_get_ap(dap, ap_num);
 		if (!ap)
 			continue;
@@ -960,13 +989,36 @@ int dap_find_get_ap(struct adiv5_dap *dap, enum ap_type type_to_find, struct adi
 	return ERROR_FAIL;
 }
 
-static struct adiv5_ap *_dap_get_ap(struct adiv5_dap *dap, unsigned int ap_num, bool is_config)
+static struct adiv5_ap *_dap_get_ap(struct adiv5_dap *dap, uint64_t ap_num, bool is_config)
 {
-	if (ap_num > DP_APSEL_MAX) {
-		LOG_ERROR("Invalid AP#%u", ap_num);
+	if (!is_ap_num_valid(dap, ap_num)) {
+		LOG_ERROR("Invalid AP#0x%" PRIx64, ap_num);
 		return NULL;
 	}
+	if (is_adiv6(dap)) {
+		for (unsigned int i = 0; i <= DP_APSEL_MAX; i++) {
+			struct adiv5_ap *ap = &dap->ap[i];
+			if (ap->refcount && ap->ap_num == ap_num) {
+				ap->refcount += 2;
+				return ap;
+			}
+		}
+		for (unsigned int i = 0; i <= DP_APSEL_MAX; i++) {
+			struct adiv5_ap *ap = &dap->ap[i];
+			if (ap->refcount == 0) {
+				ap->ap_num = ap_num;
+				ap->refcount = is_config ? 3 : 2;
+				return ap;
+			}
+		}
+		LOG_ERROR("No more AP available!");
+		return NULL;
+	}
+
+	/* ADIv5 */
 	struct adiv5_ap *ap = &dap->ap[ap_num];
+	ap->ap_num = ap_num;
+
 	if (ap->refcount == 0)
 		ap->refcount = is_config ? 3 : 2;
 	else
@@ -976,20 +1028,20 @@ static struct adiv5_ap *_dap_get_ap(struct adiv5_dap *dap, unsigned int ap_num, 
 }
 
 /* Return AP with specified ap_num. Increment AP refcount */
-struct adiv5_ap *dap_get_ap(struct adiv5_dap *dap, unsigned int ap_num)
+struct adiv5_ap *dap_get_ap(struct adiv5_dap *dap, uint64_t ap_num)
 {
 	struct adiv5_ap *ap = _dap_get_ap(dap, ap_num, false);
 	if (ap)
-		LOG_DEBUG("refcount AP#%u get %u", ap_num, ap->refcount);
+		LOG_DEBUG("refcount AP#0x%" PRIx64 " get %u", ap_num, ap->refcount);
 	return ap;
 }
 
 /* Return AP with specified ap_num. Increment AP refcount and keep it non-zero */
-struct adiv5_ap *dap_get_config_ap(struct adiv5_dap *dap, unsigned int ap_num)
+struct adiv5_ap *dap_get_config_ap(struct adiv5_dap *dap, uint64_t ap_num)
 {
 	struct adiv5_ap *ap = _dap_get_ap(dap, ap_num, true);
 	if (ap)
-		LOG_DEBUG("refcount AP#%u get_config %u", ap_num, ap->refcount);
+		LOG_DEBUG("refcount AP#0x%" PRIx64 " get_config %u", ap_num, ap->refcount);
 	return ap;
 }
 
@@ -997,14 +1049,15 @@ struct adiv5_ap *dap_get_config_ap(struct adiv5_dap *dap, unsigned int ap_num)
 int dap_put_ap(struct adiv5_ap *ap)
 {
 	if (ap->refcount < 2) {
-		LOG_ERROR("BUG: refcount AP#%" PRIu8 " put underflow", ap->ap_num);
+		LOG_ERROR("BUG: refcount AP#0x%" PRIx64 " put underflow", ap->ap_num);
 		return ERROR_FAIL;
 	}
 
 	ap->refcount -= 2;
-	LOG_DEBUG("refcount AP#%" PRIu8 " put %u", ap->ap_num, ap->refcount);
+	LOG_DEBUG("refcount AP#0x%" PRIx64 " put %u", ap->ap_num, ap->refcount);
 	if (ap->refcount == 0) {
 		/* defaults from dap_instance_init() */
+		ap->ap_num = DP_APSEL_INVALID;
 		ap->memaccess_tck = 255;
 		ap->tar_autoincr_block = (1 << 10);
 		ap->csw_default = CSW_AHB_DEFAULT;
@@ -1576,7 +1629,7 @@ int dap_info_command(struct command_invocation *cmd,
 
 	command_print(cmd, "AP ID register 0x%8.8" PRIx32, apid);
 	if (apid == 0) {
-		command_print(cmd, "No AP found at this ap 0x%x", ap->ap_num);
+		command_print(cmd, "No AP found at this AP#0x%" PRIx64, ap->ap_num);
 		return ERROR_FAIL;
 	}
 
@@ -1626,7 +1679,7 @@ static const struct jim_nvp nvp_config_opts[] = {
 };
 
 static int adiv5_jim_spot_configure(struct jim_getopt_info *goi,
-		struct adiv5_dap **dap_p, int *ap_num_p, uint32_t *base_p)
+		struct adiv5_dap **dap_p, uint64_t *ap_num_p, uint32_t *base_p)
 {
 	if (!goi->argc)
 		return JIM_OK;
@@ -1679,11 +1732,13 @@ static int adiv5_jim_spot_configure(struct jim_getopt_info *goi,
 
 	case CFG_AP_NUM:
 		if (goi->isconfigure) {
+			/* jim_wide is a signed 64 bits int, ap_num is unsigned with max 52 bits */
 			jim_wide ap_num;
 			e = jim_getopt_wide(goi, &ap_num);
 			if (e != JIM_OK)
 				return e;
-			if (ap_num < 0 || ap_num > DP_APSEL_MAX) {
+			/* we still don't know dap->adi_version */
+			if (ap_num < 0 || (ap_num > DP_APSEL_MAX && (ap_num & 0xfff))) {
 				Jim_SetResultString(goi->interp, "Invalid AP number!", -1);
 				return JIM_ERR;
 			}
@@ -1784,15 +1839,15 @@ int adiv5_mem_ap_spot_init(struct adiv5_mem_ap_spot *p)
 COMMAND_HANDLER(handle_dap_info_command)
 {
 	struct adiv5_dap *dap = adiv5_get_dap(CMD_DATA);
-	uint32_t apsel;
+	uint64_t apsel;
 
 	switch (CMD_ARGC) {
 	case 0:
 		apsel = dap->apsel;
 		break;
 	case 1:
-		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], apsel);
-		if (apsel > DP_APSEL_MAX) {
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[0], apsel);
+		if (!is_ap_num_valid(dap, apsel)) {
 			command_print(CMD, "Invalid AP number");
 			return ERROR_COMMAND_ARGUMENT_INVALID;
 		}
@@ -1815,7 +1870,8 @@ COMMAND_HANDLER(handle_dap_info_command)
 COMMAND_HANDLER(dap_baseaddr_command)
 {
 	struct adiv5_dap *dap = adiv5_get_dap(CMD_DATA);
-	uint32_t apsel, baseaddr_lower, baseaddr_upper;
+	uint64_t apsel;
+	uint32_t baseaddr_lower, baseaddr_upper;
 	struct adiv5_ap *ap;
 	target_addr_t baseaddr;
 	int retval;
@@ -1827,9 +1883,8 @@ COMMAND_HANDLER(dap_baseaddr_command)
 		apsel = dap->apsel;
 		break;
 	case 1:
-		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], apsel);
-		/* AP address is in bits 31:24 of DP_SELECT */
-		if (apsel > DP_APSEL_MAX) {
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[0], apsel);
+		if (!is_ap_num_valid(dap, apsel)) {
 			command_print(CMD, "Invalid AP number");
 			return ERROR_COMMAND_ARGUMENT_INVALID;
 		}
@@ -1914,16 +1969,15 @@ COMMAND_HANDLER(dap_memaccess_command)
 COMMAND_HANDLER(dap_apsel_command)
 {
 	struct adiv5_dap *dap = adiv5_get_dap(CMD_DATA);
-	uint32_t apsel;
+	uint64_t apsel;
 
 	switch (CMD_ARGC) {
 	case 0:
-		command_print(CMD, "%" PRIu32, dap->apsel);
+		command_print(CMD, "0x%" PRIx64, dap->apsel);
 		return ERROR_OK;
 	case 1:
-		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], apsel);
-		/* AP address is in bits 31:24 of DP_SELECT */
-		if (apsel > DP_APSEL_MAX) {
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[0], apsel);
+		if (!is_ap_num_valid(dap, apsel)) {
 			command_print(CMD, "Invalid AP number");
 			return ERROR_COMMAND_ARGUMENT_INVALID;
 		}
@@ -1949,7 +2003,7 @@ COMMAND_HANDLER(dap_apcsw_command)
 			command_print(CMD, "Cannot get AP");
 			return ERROR_FAIL;
 		}
-		command_print(CMD, "ap %" PRIu32 " selected, csw 0x%8.8" PRIx32,
+		command_print(CMD, "AP#0x%" PRIx64 " selected, csw 0x%8.8" PRIx32,
 			dap->apsel, ap->csw_default);
 		break;
 	case 1:
@@ -1996,7 +2050,8 @@ COMMAND_HANDLER(dap_apcsw_command)
 COMMAND_HANDLER(dap_apid_command)
 {
 	struct adiv5_dap *dap = adiv5_get_dap(CMD_DATA);
-	uint32_t apsel, apid;
+	uint64_t apsel;
+	uint32_t apid;
 	int retval;
 
 	switch (CMD_ARGC) {
@@ -2004,9 +2059,8 @@ COMMAND_HANDLER(dap_apid_command)
 		apsel = dap->apsel;
 		break;
 	case 1:
-		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], apsel);
-		/* AP address is in bits 31:24 of DP_SELECT */
-		if (apsel > DP_APSEL_MAX) {
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[0], apsel);
+		if (!is_ap_num_valid(dap, apsel)) {
 			command_print(CMD, "Invalid AP number");
 			return ERROR_COMMAND_ARGUMENT_INVALID;
 		}
@@ -2038,23 +2092,30 @@ COMMAND_HANDLER(dap_apid_command)
 COMMAND_HANDLER(dap_apreg_command)
 {
 	struct adiv5_dap *dap = adiv5_get_dap(CMD_DATA);
-	uint32_t apsel, reg, value;
+	uint64_t apsel;
+	uint32_t reg, value;
 	int retval;
 
 	if (CMD_ARGC < 2 || CMD_ARGC > 3)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], apsel);
-	/* AP address is in bits 31:24 of DP_SELECT */
-	if (apsel > DP_APSEL_MAX) {
+	COMMAND_PARSE_NUMBER(u64, CMD_ARGV[0], apsel);
+	if (!is_ap_num_valid(dap, apsel)) {
 		command_print(CMD, "Invalid AP number");
 		return ERROR_COMMAND_ARGUMENT_INVALID;
 	}
 
 	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], reg);
-	if (reg >= 256 || (reg & 3)) {
-		command_print(CMD, "Invalid reg value (should be less than 256 and 4 bytes aligned)");
-		return ERROR_COMMAND_ARGUMENT_INVALID;
+	if (is_adiv6(dap)) {
+		if (reg >= 4096 || (reg & 3)) {
+			command_print(CMD, "Invalid reg value (should be less than 4096 and 4 bytes aligned)");
+			return ERROR_COMMAND_ARGUMENT_INVALID;
+		}
+	} else {	/* ADI version 5 */
+		if (reg >= 256 || (reg & 3)) {
+			command_print(CMD, "Invalid reg value (should be less than 256 and 4 bytes aligned)");
+			return ERROR_COMMAND_ARGUMENT_INVALID;
+		}
 	}
 
 	struct adiv5_ap *ap = dap_get_ap(dap, apsel);
