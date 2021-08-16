@@ -1184,30 +1184,39 @@ int adiv6_dap_read_baseptr(struct command_invocation *cmd, struct adiv5_dap *dap
 int dap_lookup_cs_component(struct adiv5_ap *ap,
 			target_addr_t dbgbase, uint8_t type, target_addr_t *addr, int32_t *idx)
 {
-	uint32_t romentry, entry_offset = 0, devtype;
+	uint32_t cidr1, romentry;
+	unsigned int entry_offset = 0, max_entry_offset;
 	target_addr_t component_base;
 	int retval;
+
+	retval = mem_ap_read_atomic_u32(ap, dbgbase + ARM_CS_CIDR1, &cidr1);
+	if (retval != ERROR_OK)
+		return retval;
+
+	unsigned int class = (cidr1 & ARM_CS_CIDR1_CLASS_MASK) >> ARM_CS_CIDR1_CLASS_SHIFT;
+	if (class == ARM_CS_CLASS_0X1_ROM_TABLE)
+		max_entry_offset = 0xF00; /* class 1 entry maximum count 960 */
+	else
+		max_entry_offset = 0x800; /* class 9 entry maximum count 512 */
 
 	dbgbase &= 0xFFFFFFFFFFFFF000ull;
 	*addr = 0;
 
 	do {
-		retval = mem_ap_read_atomic_u32(ap, dbgbase |
-						entry_offset, &romentry);
+		retval = mem_ap_read_atomic_u32(ap, dbgbase + entry_offset, &romentry);
 		if (retval != ERROR_OK)
 			return retval;
 
-		component_base = dbgbase + (target_addr_t)(romentry & ARM_CS_ROMENTRY_OFFSET_MASK);
+		component_base = dbgbase + (int32_t)(romentry & ARM_CS_ROMENTRY_OFFSET_MASK);
 
 		if (romentry & ARM_CS_ROMENTRY_PRESENT) {
-			uint32_t c_cid1;
-			retval = mem_ap_read_atomic_u32(ap, component_base + ARM_CS_CIDR1, &c_cid1);
+			retval = mem_ap_read_atomic_u32(ap, component_base + ARM_CS_CIDR1, &cidr1);
 			if (retval != ERROR_OK) {
 				LOG_ERROR("Can't read component with base address " TARGET_ADDR_FMT
 					  ", the corresponding core might be turned off", component_base);
 				return retval;
 			}
-			unsigned int class = (c_cid1 & ARM_CS_CIDR1_CLASS_MASK) >> ARM_CS_CIDR1_CLASS_SHIFT;
+			class = (cidr1 & ARM_CS_CIDR1_CLASS_MASK) >> ARM_CS_CIDR1_CLASS_SHIFT;
 			if (class == ARM_CS_CLASS_0X1_ROM_TABLE) {
 				retval = dap_lookup_cs_component(ap, component_base,
 							type, addr, idx);
@@ -1215,8 +1224,11 @@ int dap_lookup_cs_component(struct adiv5_ap *ap,
 					break;
 				if (retval != ERROR_TARGET_RESOURCE_NOT_AVAILABLE)
 					return retval;
+				entry_offset += 4;
+				continue;
 			}
 
+			uint32_t devtype;
 			retval = mem_ap_read_atomic_u32(ap, component_base + ARM_CS_C9_DEVTYPE, &devtype);
 			if (retval != ERROR_OK)
 				return retval;
@@ -1227,9 +1239,21 @@ int dap_lookup_cs_component(struct adiv5_ap *ap,
 				} else
 					(*idx)--;
 			}
+			uint32_t devarch;
+			retval = mem_ap_read_atomic_u32(ap, component_base + ARM_CS_C9_DEVARCH, &devarch);
+			if (retval != ERROR_OK)
+				return retval;
+			if ((devarch & DEVARCH_ID_MASK) != DEVARCH_ROM_C_0X9) {
+				retval = dap_lookup_cs_component(ap, component_base,
+							type, addr, idx);
+				if (retval == ERROR_OK)
+					break;
+				if (retval != ERROR_TARGET_RESOURCE_NOT_AVAILABLE)
+					return retval;
+			}
 		}
 		entry_offset += 4;
-	} while ((romentry > 0) && (entry_offset < 0xf00));
+	} while ((romentry > 0) && (entry_offset < max_entry_offset));
 
 	if (!*addr)
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
