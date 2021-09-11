@@ -164,6 +164,8 @@ static uint32_t mem_ap_get_tar_increment(struct adiv5_ap *ap)
 			return 2;
 		case CSW_32BIT:
 			return 4;
+		case CSW_64BIT:
+			return 8;
 		default:
 			return 0;
 		}
@@ -319,12 +321,46 @@ int mem_ap_write_atomic_u32(struct adiv5_ap *ap, target_addr_t address,
 	return dap_run(ap->dap);
 }
 
+static int csw_size_verify(struct adiv5_ap *ap, uint32_t csw_size)
+{
+	uint32_t csw_size_bit = BIT(csw_size);
+
+	if (!(ap->csw_size_probed & csw_size_bit)) {
+		/* Probe the MEM-AP for the requested data type size (IHI0074D). */
+		uint32_t max_size = (ap->cfg_reg & MEM_AP_REG_CFG_LD) ? 7 : 2;
+		if (csw_size <= max_size) {
+			int retval = mem_ap_setup_csw(ap, csw_size);
+			if (retval != ERROR_OK)
+				return retval;
+			uint32_t csw;
+			retval = dap_queue_ap_read(ap, MEM_AP_REG_CSW(ap->dap), &csw);
+			if (retval != ERROR_OK)
+				return retval;
+			retval = dap_run(ap->dap);
+			if (retval != ERROR_OK)
+				return retval;
+			if ((csw & CSW_SIZE_MASK) == (uint32_t)csw_size)
+				ap->csw_size_supported |= csw_size_bit;
+		}
+		ap->csw_size_probed |= csw_size_bit;
+	}
+
+	/* Verify the MEM-AP supports the requested CSW data type size */
+	if (!(ap->csw_size_supported & csw_size_bit)) {
+		LOG_ERROR("AP#0x%" PRIx64 " does not support a data access size of %u bits",
+				ap->ap_num, csw_size_bit * 8);
+		return ERROR_TARGET_INVALID;
+	}
+
+	return ERROR_OK;
+}
+
 /**
  * Synchronous write of a block of memory, using a specific access size.
  *
  * @param ap The MEM-AP to access.
  * @param buffer The data buffer to write. No particular alignment is assumed.
- * @param size Which access size to use, in bytes. 1, 2 or 4.
+ * @param size Which access size to use, in bytes. 1, 2, 4 or 8.
  * @param count The number of writes to do (in size units, not bytes).
  * @param address Address to be written; it must be writable by the currently selected MEM-AP.
  * @param addrinc Whether the target address should be increased for each write or not. This
@@ -354,7 +390,14 @@ static int mem_ap_write(struct adiv5_ap *ap, const uint8_t *buffer, uint32_t siz
 	 * setting the TAP, and we set the TAP after every transfer rather then relying on
 	 * address increment. */
 
-	if (size == 4) {
+	if (size == 8) {
+		if (dap->ti_be_32_quirks) {
+			LOG_ERROR("Write 64 bits not supported with ti_be_32_quirks");
+			return ERROR_TARGET_INVALID;
+		}
+		csw_size = CSW_64BIT;
+		addr_xor = 0;
+	} else if (size == 4) {
 		csw_size = CSW_32BIT;
 		addr_xor = 0;
 	} else if (size == 2) {
@@ -367,21 +410,28 @@ static int mem_ap_write(struct adiv5_ap *ap, const uint8_t *buffer, uint32_t siz
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 	}
 
+	/* CSW 32-bit size must be supported, other sizes are implementation
+	 * defined and need to be verified (IHI0074D). */
+	if (csw_size != CSW_32BIT) {
+		retval = csw_size_verify(ap, csw_size);
+		if (retval != ERROR_OK)
+			return retval;
+	}
+
 	if (ap->unaligned_access_bad && (address % size != 0))
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 
 	while (nbytes > 0) {
 		uint32_t this_size = size;
 
-		/* Select packed transfer if possible */
-		if (addrinc && ap->packed_transfers && nbytes >= 4
+		/* Select packed transfer if possible and size < 4 */
+		if (size < 4 && addrinc && ap->packed_transfers && nbytes >= 4
 				&& max_tar_block_size(ap->tar_autoincr_block, address) >= 4) {
 			this_size = 4;
 			retval = mem_ap_setup_csw(ap, csw_size | CSW_ADDRINC_PACKED);
 		} else {
 			retval = mem_ap_setup_csw(ap, csw_size | csw_addrincr);
 		}
-
 		if (retval != ERROR_OK)
 			break;
 
@@ -392,6 +442,7 @@ static int mem_ap_write(struct adiv5_ap *ap, const uint8_t *buffer, uint32_t siz
 		/* How many source bytes each transfer will consume, and their location in the DRW,
 		 * depends on the type of transfer and alignment. See ARM document IHI0031C. */
 		uint32_t outvalue = 0;
+		uint32_t outlow = 0;
 		uint32_t drw_byte_idx = address;
 		if (dap->ti_be_32_quirks) {
 			switch (this_size) {
@@ -431,6 +482,12 @@ static int mem_ap_write(struct adiv5_ap *ap, const uint8_t *buffer, uint32_t siz
 			}
 		} else {
 			switch (this_size) {
+			case 8:
+				outlow |= (uint32_t)*buffer++ << 8 * (drw_byte_idx++ & 3);
+				outlow |= (uint32_t)*buffer++ << 8 * (drw_byte_idx++ & 3);
+				outlow |= (uint32_t)*buffer++ << 8 * (drw_byte_idx++ & 3);
+				outlow |= (uint32_t)*buffer++ << 8 * (drw_byte_idx++ & 3);
+				/* fallthrough */
 			case 4:
 				outvalue |= (uint32_t)*buffer++ << 8 * (drw_byte_idx++ & 3);
 				outvalue |= (uint32_t)*buffer++ << 8 * (drw_byte_idx++ & 3);
@@ -445,6 +502,11 @@ static int mem_ap_write(struct adiv5_ap *ap, const uint8_t *buffer, uint32_t siz
 
 		nbytes -= this_size;
 
+		if (this_size > 4) {
+			retval = dap_queue_ap_write(ap, MEM_AP_REG_DRW(dap), outlow);
+			if (retval != ERROR_OK)
+				break;
+		}
 		retval = dap_queue_ap_write(ap, MEM_AP_REG_DRW(dap), outvalue);
 		if (retval != ERROR_OK)
 			break;
@@ -474,7 +536,7 @@ static int mem_ap_write(struct adiv5_ap *ap, const uint8_t *buffer, uint32_t siz
  *
  * @param ap The MEM-AP to access.
  * @param buffer The data buffer to receive the data. No particular alignment is assumed.
- * @param size Which access size to use, in bytes. 1, 2 or 4.
+ * @param size Which access size to use, in bytes. 1, 2, 4 or 8.
  * @param count The number of reads to do (in size units, not bytes).
  * @param adr Address to be read; it must be readable by the currently selected MEM-AP.
  * @param addrinc Whether the target address should be increased after each read or not. This
@@ -498,14 +560,29 @@ static int mem_ap_read(struct adiv5_ap *ap, uint8_t *buffer, uint32_t size, uint
 	 * Also, packed 8-bit and 16-bit transfers seem to sometimes return garbage in some bytes,
 	 * so avoid them. */
 
-	if (size == 4)
+	if (size == 8) {
+		if (dap->ti_be_32_quirks) {
+			LOG_ERROR("Read 64 bits not supported with ti_be_32_quirks");
+			return ERROR_TARGET_INVALID;
+		}
+		csw_size = CSW_64BIT;
+	} else if (size == 4) {
 		csw_size = CSW_32BIT;
-	else if (size == 2)
+	} else if (size == 2) {
 		csw_size = CSW_16BIT;
-	else if (size == 1)
+	} else if (size == 1) {
 		csw_size = CSW_8BIT;
-	else
+	} else {
 		return ERROR_TARGET_UNALIGNED_ACCESS;
+	}
+
+	/* CSW 32-bit size must be supported, other sizes are implementation
+	 * defined and need to be verified (IHI0074D). */
+	if (csw_size != CSW_32BIT) {
+		retval = csw_size_verify(ap, csw_size);
+		if (retval != ERROR_OK)
+			return retval;
+	}
 
 	if (ap->unaligned_access_bad && (adr % size != 0))
 		return ERROR_TARGET_UNALIGNED_ACCESS;
@@ -513,7 +590,8 @@ static int mem_ap_read(struct adiv5_ap *ap, uint8_t *buffer, uint32_t size, uint
 	/* Allocate buffer to hold the sequence of DRW reads that will be made. This is a significant
 	 * over-allocation if packed transfers are going to be used, but determining the real need at
 	 * this point would be messy. */
-	uint32_t *read_buf = calloc(count, sizeof(uint32_t));
+	uint32_t *read_buf = calloc(count, MAX(sizeof(uint32_t), size));
+
 	/* Multiplication count * sizeof(uint32_t) may overflow, calloc() is safe */
 	uint32_t *read_ptr = read_buf;
 	if (!read_buf) {
@@ -527,8 +605,8 @@ static int mem_ap_read(struct adiv5_ap *ap, uint8_t *buffer, uint32_t size, uint
 	while (nbytes > 0) {
 		uint32_t this_size = size;
 
-		/* Select packed transfer if possible */
-		if (addrinc && ap->packed_transfers && nbytes >= 4
+		/* Select packed transfer if possible and size < 4 */
+		if (size < 4 && addrinc && ap->packed_transfers && nbytes >= 4
 				&& max_tar_block_size(ap->tar_autoincr_block, address) >= 4) {
 			this_size = 4;
 			retval = mem_ap_setup_csw(ap, csw_size | CSW_ADDRINC_PACKED);
@@ -545,6 +623,11 @@ static int mem_ap_read(struct adiv5_ap *ap, uint8_t *buffer, uint32_t size, uint
 		retval = dap_queue_ap_read(ap, MEM_AP_REG_DRW(dap), read_ptr++);
 		if (retval != ERROR_OK)
 			break;
+		if (this_size > 4) {
+			retval = dap_queue_ap_read(ap, MEM_AP_REG_DRW(dap), read_ptr++);
+			if (retval != ERROR_OK)
+				break;
+		}
 
 		nbytes -= this_size;
 		if (addrinc)
@@ -580,7 +663,7 @@ static int mem_ap_read(struct adiv5_ap *ap, uint8_t *buffer, uint32_t size, uint
 	while (nbytes > 0) {
 		uint32_t this_size = size;
 
-		if (addrinc && ap->packed_transfers && nbytes >= 4
+		if (size < 4 && addrinc && ap->packed_transfers && nbytes >= 4
 				&& max_tar_block_size(ap->tar_autoincr_block, address) >= 4) {
 			this_size = 4;
 		}
@@ -599,6 +682,13 @@ static int mem_ap_read(struct adiv5_ap *ap, uint8_t *buffer, uint32_t size, uint
 			}
 		} else {
 			switch (this_size) {
+			case 8:
+				*buffer++ = *read_ptr >> 8 * (address++ & 3);
+				*buffer++ = *read_ptr >> 8 * (address++ & 3);
+				*buffer++ = *read_ptr >> 8 * (address++ & 3);
+				*buffer++ = *read_ptr >> 8 * (address++ & 3);
+				read_ptr++;
+				/* fallthrough */
 			case 4:
 				*buffer++ = *read_ptr >> 8 * (address++ & 3);
 				*buffer++ = *read_ptr >> 8 * (address++ & 3);
@@ -783,7 +873,7 @@ int dap_dp_init_or_reconnect(struct adiv5_dap *dap)
 int mem_ap_init(struct adiv5_ap *ap)
 {
 	/* check that we support packed transfers */
-	uint32_t csw, cfg;
+	uint32_t cfg;
 	int retval;
 	struct adiv5_dap *dap = ap->dap;
 
@@ -800,27 +890,16 @@ int mem_ap_init(struct adiv5_ap *ap)
 	ap->cfg_reg = cfg;
 	ap->tar_valid = false;
 	ap->csw_value = 0;      /* force csw and tar write */
-	retval = mem_ap_setup_transfer(ap, CSW_8BIT | CSW_ADDRINC_PACKED, 0);
-	if (retval != ERROR_OK)
-		return retval;
 
-	retval = dap_queue_ap_read(ap, MEM_AP_REG_CSW(dap), &csw);
-	if (retval != ERROR_OK)
-		return retval;
+	/* CSW 32-bit size must be supported (IHI0074D). */
+	ap->csw_size_supported = BIT(CSW_32BIT);
+	ap->csw_size_probed = BIT(CSW_32BIT);
 
-	retval = dap_run(dap);
-	if (retval != ERROR_OK)
-		return retval;
-
-	if (csw & CSW_ADDRINC_PACKED)
-		ap->packed_transfers = true;
-	else
-		ap->packed_transfers = false;
-
-	/* Packed transfers on TI BE-32 processors do not work correctly in
+	/* Implementations that support transfers smaller than a word must
+	 * support packed transfers (IHI0074D).
+	 * Packed transfers on TI BE-32 processors do not work correctly in
 	 * many cases. */
-	if (dap->ti_be_32_quirks)
-		ap->packed_transfers = false;
+	ap->packed_transfers = dap->ti_be_32_quirks ? false : true;
 
 	LOG_DEBUG("MEM_AP Packed Transfers: %s",
 			ap->packed_transfers ? "enabled" : "disabled");
