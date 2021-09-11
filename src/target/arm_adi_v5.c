@@ -347,7 +347,7 @@ static int mem_ap_write(struct adiv5_ap *ap, const uint8_t *buffer, uint32_t siz
 {
 	struct adiv5_dap *dap = ap->dap;
 	size_t nbytes = size * count;
-	const uint32_t csw_addrincr = addrinc ? CSW_ADDRINC_SINGLE : CSW_ADDRINC_OFF;
+	uint32_t csw_addrincr = addrinc ? CSW_ADDRINC_SINGLE : CSW_ADDRINC_OFF;
 	uint32_t csw_size;
 	target_addr_t addr_xor;
 	int retval = ERROR_OK;
@@ -365,7 +365,11 @@ static int mem_ap_write(struct adiv5_ap *ap, const uint8_t *buffer, uint32_t siz
 	 * setting the TAP, and we set the TAP after every transfer rather then relying on
 	 * address increment. */
 
-	if (size == 4) {
+	if (size == 8) {
+		csw_size = CSW_64BIT;
+		addr_xor = 0;
+		csw_addrincr = CSW_ADDRINC_OFF;
+	} else if (size == 4) {
 		csw_size = CSW_32BIT;
 		addr_xor = 0;
 	} else if (size == 2) {
@@ -385,7 +389,7 @@ static int mem_ap_write(struct adiv5_ap *ap, const uint8_t *buffer, uint32_t siz
 		uint32_t this_size = size;
 
 		/* Select packed transfer if possible */
-		if (addrinc && ap->packed_transfers && nbytes >= 4
+		if ((size <= 4) && addrinc && ap->packed_transfers && nbytes >= 4
 				&& max_tar_block_size(ap->tar_autoincr_block, address) >= 4) {
 			this_size = 4;
 			retval = mem_ap_setup_csw(ap, csw_size | CSW_ADDRINC_PACKED);
@@ -403,6 +407,7 @@ static int mem_ap_write(struct adiv5_ap *ap, const uint8_t *buffer, uint32_t siz
 		/* How many source bytes each transfer will consume, and their location in the DRW,
 		 * depends on the type of transfer and alignment. See ARM document IHI0031C. */
 		uint32_t outvalue = 0;
+		uint32_t outlow = 0;
 		uint32_t drw_byte_idx = address;
 		if (dap->ti_be_32_quirks) {
 			switch (this_size) {
@@ -422,6 +427,12 @@ static int mem_ap_write(struct adiv5_ap *ap, const uint8_t *buffer, uint32_t siz
 			}
 		} else {
 			switch (this_size) {
+			case 8:
+				outlow |= (uint32_t)*buffer++ << 8 * (drw_byte_idx++ & 3);
+				outlow |= (uint32_t)*buffer++ << 8 * (drw_byte_idx++ & 3);
+				outlow |= (uint32_t)*buffer++ << 8 * (drw_byte_idx++ & 3);
+				outlow |= (uint32_t)*buffer++ << 8 * (drw_byte_idx++ & 3);
+				/* fallthrough */
 			case 4:
 				outvalue |= (uint32_t)*buffer++ << 8 * (drw_byte_idx++ & 3);
 				outvalue |= (uint32_t)*buffer++ << 8 * (drw_byte_idx++ & 3);
@@ -436,6 +447,11 @@ static int mem_ap_write(struct adiv5_ap *ap, const uint8_t *buffer, uint32_t siz
 
 		nbytes -= this_size;
 
+		if (this_size > 4) {
+			retval = dap_queue_ap_write(ap, MEM_AP_REG_DRW(dap), outlow);
+			if (retval != ERROR_OK)
+				break;
+		}
 		retval = dap_queue_ap_write(ap, MEM_AP_REG_DRW(dap), outvalue);
 		if (retval != ERROR_OK)
 			break;
@@ -477,7 +493,7 @@ static int mem_ap_read(struct adiv5_ap *ap, uint8_t *buffer, uint32_t size, uint
 {
 	struct adiv5_dap *dap = ap->dap;
 	size_t nbytes = size * count;
-	const uint32_t csw_addrincr = addrinc ? CSW_ADDRINC_SINGLE : CSW_ADDRINC_OFF;
+	uint32_t csw_addrincr = addrinc ? CSW_ADDRINC_SINGLE : CSW_ADDRINC_OFF;
 	uint32_t csw_size;
 	target_addr_t address = adr;
 	int retval = ERROR_OK;
@@ -489,7 +505,10 @@ static int mem_ap_read(struct adiv5_ap *ap, uint8_t *buffer, uint32_t size, uint
 	 * Also, packed 8-bit and 16-bit transfers seem to sometimes return garbage in some bytes,
 	 * so avoid them. */
 
-	if (size == 4)
+	if (size == 8) {
+		csw_size = CSW_64BIT;
+		csw_addrincr = CSW_ADDRINC_OFF;
+	} else if (size == 4)
 		csw_size = CSW_32BIT;
 	else if (size == 2)
 		csw_size = CSW_16BIT;
@@ -519,7 +538,7 @@ static int mem_ap_read(struct adiv5_ap *ap, uint8_t *buffer, uint32_t size, uint
 		uint32_t this_size = size;
 
 		/* Select packed transfer if possible */
-		if (addrinc && ap->packed_transfers && nbytes >= 4
+		if ((size <= 4) && addrinc && ap->packed_transfers && nbytes >= 4
 				&& max_tar_block_size(ap->tar_autoincr_block, address) >= 4) {
 			this_size = 4;
 			retval = mem_ap_setup_csw(ap, csw_size | CSW_ADDRINC_PACKED);
@@ -536,6 +555,11 @@ static int mem_ap_read(struct adiv5_ap *ap, uint8_t *buffer, uint32_t size, uint
 		retval = dap_queue_ap_read(ap, MEM_AP_REG_DRW(dap), read_ptr++);
 		if (retval != ERROR_OK)
 			break;
+		if (size > 4) {
+			retval = dap_queue_ap_read(ap, MEM_AP_REG_DRW(dap), read_ptr++);
+			if (retval != ERROR_OK)
+				break;
+		}
 
 		nbytes -= this_size;
 		if (addrinc)
@@ -590,6 +614,13 @@ static int mem_ap_read(struct adiv5_ap *ap, uint8_t *buffer, uint32_t size, uint
 			}
 		} else {
 			switch (this_size) {
+			case 8:
+				*buffer++ = *read_ptr >> 8 * (address++ & 3);
+				*buffer++ = *read_ptr >> 8 * (address++ & 3);
+				*buffer++ = *read_ptr >> 8 * (address++ & 3);
+				*buffer++ = *read_ptr >> 8 * (address++ & 3);
+				read_ptr++;
+				/* fallthrough */
 			case 4:
 				*buffer++ = *read_ptr >> 8 * (address++ & 3);
 				*buffer++ = *read_ptr >> 8 * (address++ & 3);
