@@ -161,6 +161,7 @@
 #define CSW_8BIT		0
 #define CSW_16BIT		1
 #define CSW_32BIT		2
+#define CSW_64BIT		3
 #define CSW_ADDRINC_MASK    (3UL << 4)
 #define CSW_ADDRINC_OFF     0UL
 #define CSW_ADDRINC_SINGLE  (1UL << 4)
@@ -264,6 +265,21 @@ struct adiv5_ap {
 	 * word access.  "-1" indicates no cached value.
 	 */
 	uint32_t csw_value;
+
+	/**
+	 * Save the supported CSW.Size data types for the MEM-AP.
+	 * Each bit corresponds to a data type.
+	 * 0b1 = Supported data type. 0b0 = Not supported.
+	 * Bit 0 = Byte (8-bits)
+	 * Bit 1 = Halfword (16-bits)
+	 * Bit 2 = Word (32-bits)
+	 * Bit 3 = Doubleword (64-bits)
+	 * Bit 4 = 128-bits
+	 * Bit 5 = 256-bits
+	 * Bits 6, 7 = Reserved
+	 */
+	uint32_t csw_size_supported;
+	uint32_t csw_size_probed;
 
 	/**
 	 * Cache for (MEM-AP) AP_REG_TAR register value This is written to
