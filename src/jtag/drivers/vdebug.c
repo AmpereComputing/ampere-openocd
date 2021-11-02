@@ -72,7 +72,7 @@
 #include "helper/replacements.h"
 #include "helper/log.h"
 
-#define VD_VERSION 43
+#define VD_VERSION 42
 #define VD_BUFFER_LEN 4024
 #define VD_CHEADER_LEN 24
 #define VD_SHEADER_LEN 16
