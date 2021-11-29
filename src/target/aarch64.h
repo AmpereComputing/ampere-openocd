@@ -48,6 +48,11 @@ enum aarch64_steponly_mode {
 	AARCH64_STEPONLY_ON,
 };
 
+enum aarch64_cti_mode {
+	AARCH64_CTIMODE_LEGACY,
+	AARCH64_CTIMODE_EXTEND
+};
+
 struct aarch64_brp {
 	int used;
 	int type;
@@ -79,6 +84,8 @@ struct aarch64_common {
 	enum aarch64_isrmasking_mode isrmasking_mode;
 
 	enum aarch64_steponly_mode step_only_mode;
+
+	enum aarch64_cti_mode cti_mode;
 };
 
 static inline struct aarch64_common *
