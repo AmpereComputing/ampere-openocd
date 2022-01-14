@@ -59,6 +59,7 @@ int hybrid_breakpoint_add(struct target *target,
 		enum breakpoint_type type);
 int breakpoint_remove(struct target *target, target_addr_t address);
 int breakpoint_remove_all(struct target *target);
+int breakpoint_remove_all_internal(struct target *target);
 
 struct breakpoint *breakpoint_find(struct target *target, target_addr_t address);
 
@@ -73,6 +74,7 @@ int watchpoint_add(struct target *target,
 		enum watchpoint_rw rw, uint64_t value, uint64_t mask);
 int watchpoint_remove(struct target *target, target_addr_t address);
 int watchpoint_remove_all(struct target *target);
+int watchpoint_remove_all_internal(struct target *target);
 
 /* report type and address of just hit watchpoint */
 int watchpoint_hit(struct target *target, enum watchpoint_rw *rw,
