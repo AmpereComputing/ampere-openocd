@@ -656,15 +656,6 @@ static int no_mmu(struct target *target, int *enabled)
 	return ERROR_OK;
 }
 
-/**
- * Reset the @c examined flag for the given target.
- * Pure paranoia -- targets are zeroed on allocation.
- */
-static inline void target_reset_examined(struct target *target)
-{
-	target->examined = false;
-}
-
 static int default_examine(struct target *target)
 {
 	target_set_examined(target);
@@ -5275,14 +5266,18 @@ COMMAND_HANDLER(handle_target_configure)
 COMMAND_HANDLER(handle_target_examine)
 {
 	bool allow_defer = false;
+	bool detach = false;
 
 	if (CMD_ARGC > 1)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
 	if (CMD_ARGC == 1) {
-		if (strcmp(CMD_ARGV[0], "allow-defer"))
+		if (!strcmp(CMD_ARGV[0], "allow-defer"))
+			allow_defer = true;
+		else if (!strcmp(CMD_ARGV[0], "detach"))
+			detach = true;
+		else
 			return ERROR_COMMAND_ARGUMENT_INVALID;
-		allow_defer = true;
 	}
 
 	struct target *target = get_current_target(CMD_CTX);
@@ -5290,6 +5285,8 @@ COMMAND_HANDLER(handle_target_examine)
 		command_print(CMD, "[TAP is disabled]");
 		return ERROR_FAIL;
 	}
+
+	target->detach = detach;
 
 	if (allow_defer && target->defer_examine) {
 		LOG_INFO("Deferring arp_examine of %s", target_name(target));
@@ -5303,7 +5300,8 @@ COMMAND_HANDLER(handle_target_examine)
 		return retval;
 	}
 
-	target_set_examined(target);
+	if (!detach)
+		target_set_examined(target);
 
 	return ERROR_OK;
 }

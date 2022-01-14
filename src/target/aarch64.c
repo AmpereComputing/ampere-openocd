@@ -2856,6 +2856,25 @@ static int aarch64_examine(struct target *target)
 {
 	int retval = ERROR_OK;
 
+	if (target->detach) {
+		if (target_was_examined(target) && target->state == TARGET_HALTED) {
+			LOG_TARGET_DEBUG(target, "Removing breakpoints");
+			breakpoint_remove_all_internal(target);
+			LOG_TARGET_DEBUG(target, "Removing watchpoints");
+			watchpoint_remove_all_internal(target);
+
+			LOG_TARGET_DEBUG(target, "Restoring target state");
+			uint64_t address;
+			retval = aarch64_restore_one(target, true, &address, false, false);
+			if (retval != ERROR_OK)
+				LOG_TARGET_ERROR(target, "Failed to restore target state");
+		}
+		target_reset_examined(target);
+		LOG_TARGET_DEBUG(target, "Detached");
+
+		return retval;
+	}
+
 	/* don't re-probe hardware after each reset */
 	if (!target_was_examined(target))
 		retval = aarch64_examine_first(target);

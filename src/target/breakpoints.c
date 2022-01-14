@@ -348,7 +348,7 @@ static int breakpoint_remove_internal(struct target *target, target_addr_t addre
 	}
 }
 
-static int breakpoint_remove_all_internal(struct target *target)
+int breakpoint_remove_all_internal(struct target *target)
 {
 	LOG_TARGET_DEBUG(target, "Delete all breakpoints");
 
@@ -437,7 +437,7 @@ static int watchpoint_free(struct target *target, struct watchpoint *watchpoint_
 	return ERROR_OK;
 }
 
-static int watchpoint_remove_all_internal(struct target *target)
+int watchpoint_remove_all_internal(struct target *target)
 {
 	struct watchpoint *watchpoint = target->watchpoints;
 	int retval = ERROR_OK;
