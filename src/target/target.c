@@ -5653,6 +5653,7 @@ COMMAND_HANDLER(handle_target_examine)
 	}
 
 	if (allow_defer && target->defer_examine) {
+		target_reset_examined(target);
 		LOG_INFO("Deferring arp_examine of %s", target_name(target));
 		LOG_INFO("Use arp_examine command to examine it manually!");
 		return ERROR_OK;
