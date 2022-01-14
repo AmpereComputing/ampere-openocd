@@ -140,6 +140,9 @@ struct target {
 	 */
 	bool active_polled;
 
+	/** Set to true to detach from the target */
+	bool detach;
+
 	/**
 	 * true if the  target is currently running a downloaded
 	 * "algorithm" instead of arbitrary user code. OpenOCD code
@@ -461,6 +464,20 @@ static inline void target_set_examined(struct target *target)
 {
 	target->active_polled = true;
 	target->examined = true;
+}
+
+/**
+ * Reset the @c examined flag for the given target.
+ * Pure paranoia -- targets are zeroed on allocation.
+ */
+static inline void target_reset_examined(struct target *target)
+{
+	target->examined = false;
+}
+
+static inline void target_reset_active_polled(struct target *target)
+{
+	target->active_polled = false;
 }
 
 /**
