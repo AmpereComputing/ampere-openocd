@@ -5726,6 +5726,7 @@ static int jim_target_examine(Jim_Interp *interp, int argc, Jim_Obj *const *argv
 		return jim_target_tap_disabled(interp);
 
 	if (allow_defer && target->defer_examine) {
+		target_reset_examined(target);
 		LOG_INFO("Deferring arp_examine of %s", target_name(target));
 		LOG_INFO("Use arp_examine command to examine it manually!");
 		return JIM_OK;

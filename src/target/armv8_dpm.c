@@ -1622,6 +1622,10 @@ int armv8_dpm_setup(struct arm_dpm *dpm)
 		cache = armv8_build_reg_cache(target);
 		if (!cache)
 			return ERROR_FAIL;
+	} else {
+		/* If prior register cache exists, invalidate it */
+		register_cache_invalidate(arm->core_cache);
+		register_cache_invalidate(arm->core_cache->next);
 	}
 
 	/* coprocessor access setup */
