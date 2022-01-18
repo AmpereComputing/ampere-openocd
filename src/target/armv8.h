@@ -195,8 +195,11 @@ struct armv8_common {
 
 	/* mdir */
 	uint8_t multi_processor_system;
-	uint8_t cluster_id;
-	uint8_t cpu_id;
+	uint8_t aff3;
+	uint8_t aff2;
+	uint8_t aff1;
+	uint8_t aff0;
+	uint8_t mt;
 
 	/* armv8 aarch64 need below information for page translation */
 	uint8_t va_size;
