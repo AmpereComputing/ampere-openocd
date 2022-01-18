@@ -801,7 +801,7 @@ int armv8_read_mpidr(struct armv8_common *armv8)
 	int retval = ERROR_FAIL;
 	struct arm *arm = &armv8->arm;
 	struct arm_dpm *dpm = armv8->arm.dpm;
-	uint32_t mpidr;
+	uint64_t mpidr;
 
 	retval = dpm->prepare(dpm);
 	if (retval != ERROR_OK)
@@ -814,17 +814,26 @@ int armv8_read_mpidr(struct armv8_common *armv8)
 			return retval;
 	}
 
-	retval = dpm->instr_read_data_r0(dpm, armv8_opcode(armv8, READ_REG_MPIDR), &mpidr);
+	retval = dpm->instr_read_data_r0_64(dpm, ARMV8_MRS(SYSTEM_MPIDR, 0), &mpidr);
 	if (retval != ERROR_OK)
 		goto done;
 	if (mpidr & 1U<<31) {
 		armv8->multi_processor_system = (mpidr >> 30) & 1;
-		armv8->cluster_id = (mpidr >> 8) & 0xf;
-		armv8->cpu_id = mpidr & 0x3;
-		LOG_INFO("%s cluster %x core %x %s", target_name(armv8->arm.target),
-			armv8->cluster_id,
-			armv8->cpu_id,
-			armv8->multi_processor_system == 0 ? "multi core" : "single core");
+		armv8->aff3 = (mpidr >> 32) & 0xff;
+		armv8->aff2 = (mpidr >> 16) & 0xff;
+		armv8->aff1 = (mpidr >> 8) & 0xff;
+		armv8->aff0 = mpidr & 0xff;
+		armv8->mt = (mpidr >> 24) & 0x1;
+		if (armv8->mt)
+			LOG_INFO("%s socket 0x%02" PRIx32 " cluster 0x%02" PRIx32 " core 0x%02" PRIx32
+				" thread 0x%02" PRIx32 " %s", target_name(armv8->arm.target),
+				armv8->aff3, armv8->aff2, armv8->aff1, armv8->aff0,
+				armv8->multi_processor_system == 0 ? "multi core" : "single core");
+		else
+			LOG_INFO("%s cluster %x core %x %s", target_name(armv8->arm.target),
+				armv8->aff1,
+				armv8->aff0,
+				armv8->multi_processor_system == 0 ? "multi core" : "single core");
 	} else
 		LOG_ERROR("mpidr not in multiprocessor format");
 
