@@ -656,7 +656,9 @@ static int jtagdp_transaction_endcheck(struct adiv5_dap *dap)
 	if (ctrlstat & SSTICKYERR) {
 		LOG_DEBUG("jtag-dp: CTRL/STAT 0x%" PRIx32, ctrlstat);
 		/* Check power to debug regions */
-		pwrmask = CDBGPWRUPREQ | CDBGPWRUPACK | CSYSPWRUPREQ;
+		pwrmask = CDBGPWRUPREQ | CSYSPWRUPREQ;
+		if (!dap->ignore_dbgpwrupack)
+			pwrmask |= CDBGPWRUPACK;
 		if (!dap->ignore_syspwrupack)
 			pwrmask |= CSYSPWRUPACK;
 		if ((ctrlstat & pwrmask) != pwrmask) {

@@ -391,6 +391,9 @@ struct adiv5_dap {
 	 */
 	bool do_reconnect;
 
+	/** Flag saying whether to ignore the dbgpwrupack flag in DAP. */
+	bool ignore_dbgpwrupack;
+
 	/** Flag saying whether to ignore the syspwrupack flag in DAP. Some devices
 	 *  do not set this bit until later in the bringup sequence */
 	bool ignore_syspwrupack;
