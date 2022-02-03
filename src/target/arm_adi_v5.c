@@ -798,12 +798,14 @@ int dap_dp_init(struct adiv5_dap *dap)
 		return retval;
 
 	/* Check that we have debug power domains activated */
-	LOG_DEBUG("DAP: wait CDBGPWRUPACK");
-	retval = dap_dp_poll_register(dap, DP_CTRL_STAT,
-				      CDBGPWRUPACK, CDBGPWRUPACK,
-				      DAP_POWER_DOMAIN_TIMEOUT);
-	if (retval != ERROR_OK)
-		return retval;
+	if (!dap->ignore_dbgpwrupack) {
+		LOG_DEBUG("DAP: wait CDBGPWRUPACK");
+		retval = dap_dp_poll_register(dap, DP_CTRL_STAT,
+					      CDBGPWRUPACK, CDBGPWRUPACK,
+					      DAP_POWER_DOMAIN_TIMEOUT);
+		if (retval != ERROR_OK)
+			return retval;
+	}
 
 	if (!dap->ignore_syspwrupack) {
 		LOG_DEBUG("DAP: wait CSYSPWRUPACK");
