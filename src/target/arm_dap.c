@@ -180,6 +180,7 @@ int dap_cleanup_all(void)
 
 enum dap_cfg_param {
 	CFG_CHAIN_POSITION,
+	CFG_IGNORE_DBGPWRUPACK,
 	CFG_IGNORE_SYSPWRUPACK,
 	CFG_DP_ID,
 	CFG_INSTANCE_ID,
@@ -189,6 +190,7 @@ enum dap_cfg_param {
 
 static const struct jim_nvp nvp_config_opts[] = {
 	{ .name = "-chain-position",     .value = CFG_CHAIN_POSITION },
+	{ .name = "-ignore-dbgpwrupack", .value = CFG_IGNORE_DBGPWRUPACK },
 	{ .name = "-ignore-syspwrupack", .value = CFG_IGNORE_SYSPWRUPACK },
 	{ .name = "-dp-id",              .value = CFG_DP_ID },
 	{ .name = "-instance-id",        .value = CFG_INSTANCE_ID },
@@ -228,6 +230,9 @@ static int dap_configure(struct jim_getopt_info *goi, struct arm_dap_object *dap
 			/* loop for more */
 			break;
 		}
+		case CFG_IGNORE_DBGPWRUPACK:
+			dap->dap.ignore_dbgpwrupack = true;
+			break;
 		case CFG_IGNORE_SYSPWRUPACK:
 			dap->dap.ignore_syspwrupack = true;
 			break;
