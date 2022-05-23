@@ -53,7 +53,7 @@
 #include "helper/log.h"
 #include "helper/list.h"
 
-#define VD_VERSION 48
+#define VD_VERSION 42
 #define VD_BUFFER_LEN 4024
 #define VD_CHEADER_LEN 24
 #define VD_SHEADER_LEN 16
