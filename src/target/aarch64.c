@@ -25,6 +25,8 @@
 #include <helper/nvp.h>
 #include <helper/time_support.h>
 
+static enum aarch64_bpcnt_mode bpcnt_mode = AARCH64_BPCNT_OFF;
+
 enum restart_mode {
 	RESTART_LAZY,
 	RESTART_SYNC,
@@ -2771,13 +2773,17 @@ static int aarch64_examine_first(struct target *target)
 
 	armv8->cti = pc->cti;
 
-	retval = aarch64_dpm_setup(aarch64, debug);
-	if (retval != ERROR_OK)
-		return retval;
-
 	/* Setup Breakpoint Register Pairs */
 	aarch64->brp_num = (uint32_t)((debug >> 12) & 0x0F) + 1;
 	aarch64->brp_num_context = (uint32_t)((debug >> 28) & 0x0F) + 1;
+	if (aarch64->bpcnt_mode == AARCH64_BPCNT_ON) {
+		/* Reserve upper two breakpoints for implementation defined feature */
+		aarch64->brp_num -= 2;
+		if (aarch64->brp_num_context == 1)
+			aarch64->brp_num_context = 0;
+		else
+			aarch64->brp_num_context -= 2;
+	}
 	aarch64->brp_num_available = aarch64->brp_num;
 	aarch64->brp_list = calloc(aarch64->brp_num, sizeof(struct aarch64_brp));
 	for (i = 0; i < aarch64->brp_num; i++) {
@@ -2802,6 +2808,12 @@ static int aarch64_examine_first(struct target *target)
 		aarch64->wp_list[i].control = 0;
 		aarch64->wp_list[i].brpn = i;
 	}
+
+	debug = (debug & ~0x0000F000ULL) | ((aarch64->brp_num - 1) << 12);
+	debug = (debug & ~0x00F00000ULL) | ((aarch64->wp_num - 1) << 20);
+	retval = aarch64_dpm_setup(aarch64, debug);
+	if (retval != ERROR_OK)
+		return retval;
 
 	LOG_DEBUG("Configured %i hw breakpoints, %i watchpoints",
 		aarch64->brp_num, aarch64->wp_num);
@@ -2852,6 +2864,7 @@ static int aarch64_init_arch_info(struct target *target,
 	aarch64->cti_mode = AARCH64_CTIMODE_LEGACY;	/* default to legacy */
 	aarch64->isrmasking_mode = AARCH64_ISRMASK_ON;
 	aarch64->step_only_mode = AARCH64_STEPONLY_OFF; /* resume smp cpus while stepping single cpu */
+	aarch64->bpcnt_mode = bpcnt_mode;
 	armv8->arm.dap = dap;
 
 	/* register arch-specific functions */
@@ -3197,6 +3210,13 @@ COMMAND_HANDLER(aarch64_cti_mode)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(aarch64_bpcnt_command)
+{
+	bpcnt_mode = AARCH64_BPCNT_ON;
+
+	return ERROR_OK;
+}
+
 COMMAND_HANDLER(aarch64_mcrmrc_command)
 {
 	bool is_mcr = false;
@@ -3535,6 +3555,22 @@ static const struct command_registration aarch64_command_handlers[] = {
 	},
 	COMMAND_REGISTRATION_DONE
 };
+
+static const struct command_registration aarch64_bpcnt_handler[] = {
+	{
+		.name = "bkpt_cnt",
+		.mode = COMMAND_CONFIG,
+		.help = "Enable Ampere implementation defined feature",
+		.usage = "",
+		.handler = aarch64_bpcnt_command,
+	},
+	COMMAND_REGISTRATION_DONE
+};
+
+int impdef_register_commands(struct command_context *cmd_ctx)
+{
+	return register_commands(cmd_ctx, NULL, aarch64_bpcnt_handler);
+}
 
 struct target_type aarch64_target = {
 	.name = "aarch64",
