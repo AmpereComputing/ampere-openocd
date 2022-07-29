@@ -40,6 +40,11 @@ enum aarch64_cti_mode {
 	AARCH64_CTIMODE_EXTEND
 };
 
+enum aarch64_bpcnt_mode {
+	AARCH64_BPCNT_OFF,
+	AARCH64_BPCNT_ON,
+};
+
 struct aarch64_brp {
 	int used;
 	int type;
@@ -73,6 +78,8 @@ struct aarch64_common {
 	enum aarch64_steponly_mode step_only_mode;
 
 	enum aarch64_cti_mode cti_mode;
+
+	enum aarch64_bpcnt_mode bpcnt_mode;
 };
 
 static inline struct aarch64_common *
@@ -80,5 +87,7 @@ target_to_aarch64(struct target *target)
 {
 	return container_of(target->arch_info, struct aarch64_common, armv8_common.arm);
 }
+
+int impdef_register_commands(struct command_context *cmd_ctx);
 
 #endif /* OPENOCD_TARGET_AARCH64_H */

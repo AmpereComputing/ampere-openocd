@@ -24,6 +24,7 @@
 #include <flash/nor/core.h>
 #include <flash/nand/core.h>
 #include <pld/pld.h>
+#include <target/aarch64.h>
 #include <target/arm_cti.h>
 #include <target/arm_adi_v5.h>
 #include <target/arm_tpiu_swo.h>
@@ -256,6 +257,7 @@ static struct command_context *setup_command_handler(Jim_Interp *interp)
 		&cti_register_commands,
 		&dap_register_commands,
 		&arm_tpiu_swo_register_commands,
+		&impdef_register_commands,
 		NULL
 	};
 	for (unsigned i = 0; command_registrants[i]; i++) {
