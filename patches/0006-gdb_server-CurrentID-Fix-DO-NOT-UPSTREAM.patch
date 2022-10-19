@@ -1,0 +1,36 @@
+From 7171b978ad9c032e6da7b3f8645f8a859c998691 Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Tue, 10 Sep 2019 18:06:46 +0000
+Subject: [PATCH 06/36] gdb_server: CurrentID Fix [DO NOT UPSTREAM]
+
+The "hwthread_update_threads()" call deletes the previous thread
+details. This fix saves and restores the GDB RTOS current_threadid
+value through the thread detail deletion.
+
+Tested on an Ampere eMAG8180 and Quicksilver silicon
+
+Change-Id: Id67864bc7cd028a70c4c07e0b57ea3f46103857a
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/rtos/hwthread.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/rtos/hwthread.c b/src/rtos/hwthread.c
+index bdd5835c2..504723c32 100644
+--- a/src/rtos/hwthread.c
++++ b/src/rtos/hwthread.c
+@@ -88,8 +88,10 @@ static int hwthread_update_threads(struct rtos *rtos)
+ 
+ 	target = rtos->target;
+ 
+-	/* wipe out previous thread details if any */
++	/* wipe out previous thread details, but preserve GDB current_threadid */
++	int64_t current_threadid = rtos->current_threadid;
+ 	rtos_free_threadlist(rtos);
++	rtos->current_threadid = current_threadid;
+ 
+ 	/* determine the number of "threads" */
+ 	if (target->smp) {
+-- 
+2.25.1
+

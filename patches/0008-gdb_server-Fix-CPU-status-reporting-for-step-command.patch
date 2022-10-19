@@ -1,0 +1,46 @@
+From 5ca8690b210f6d5344c58ca1ac68cca1b1848ce5 Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Thu, 25 Apr 2019 11:38:04 -0400
+Subject: [PATCH 08/36] gdb_server: Fix CPU status reporting for 'step' command
+
+The call to 'rtos_update_threads()' should be after the call
+to 'target_step()' and not before. With the update, 'info threads'
+reports the current hardware thread state.
+
+Tested on an Ampere eMAG8180 and Quicksilver silicon
+
+Change-Id: I2168d3f965a4d7cceac40bc3dcf198e413ee4fe6
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/server/gdb_server.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/src/server/gdb_server.c b/src/server/gdb_server.c
+index 5d7e188f8..dfd4c7ae0 100644
+--- a/src/server/gdb_server.c
++++ b/src/server/gdb_server.c
+@@ -3048,9 +3048,6 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
+ 		}
+ 
+ 		if (target->rtos) {
+-			/* FIXME: why is this necessary? rtos state should be up-to-date here already! */
+-			rtos_update_threads(target);
+-
+ 			target->rtos->gdb_target_for_threadid(connection, thread_id, &ct);
+ 		}
+ 
+@@ -3106,6 +3103,11 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
+ 		if (retval == ERROR_TARGET_NOT_HALTED)
+ 			LOG_INFO("target %s was not halted when step was requested", target_name(ct));
+ 
++		if (target->rtos != NULL) {
++			/* After executing the 'step' command, update the rtos threads */
++			rtos_update_threads(target);
++		}
++
+ 		/* if step was successful send a reply back to gdb */
+ 		if (retval == ERROR_OK) {
+ 			retval = target_poll(ct);
+-- 
+2.25.1
+

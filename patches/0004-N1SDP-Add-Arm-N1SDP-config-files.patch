@@ -1,0 +1,232 @@
+From 738217b7481487e53e8f027c928d826bac40764a Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Wed, 1 Apr 2020 15:50:19 -0400
+Subject: [PATCH 04/36] N1SDP: Add Arm N1SDP config files
+
+Add board and target configuration files for
+Arm Dawn N1SDP board and N1 processor.
+
+Tested on an Arm Dawn N1SDP development platform
+
+Change-Id: I060db53d465404c3dafadd4e0d1f284bb69f2301
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ tcl/board/arm_n1sdp.cfg |  39 ++++++++++
+ tcl/target/arm_n1.cfg   | 159 ++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 198 insertions(+)
+ create mode 100644 tcl/board/arm_n1sdp.cfg
+ create mode 100644 tcl/target/arm_n1.cfg
+
+diff --git a/tcl/board/arm_n1sdp.cfg b/tcl/board/arm_n1sdp.cfg
+new file mode 100644
+index 000000000..be392af2e
+--- /dev/null
++++ b/tcl/board/arm_n1sdp.cfg
+@@ -0,0 +1,39 @@
++#
++# OpenOCD Board Configuration for Arm Neoverse N1 SDP
++#
++# Copyright (c) 2019-2020, Ampere Computing LLC
++#
++# This program is free software; you can redistribute it and/or
++# modify it under the terms of the GNU General Public License as
++# published by the Free Software Foundation; either version 2 of
++# the License, or (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program;
++#
++#
++
++#
++# Configure JTAG speed
++#
++
++adapter speed 1000
++
++#
++# Configure Resets
++#
++
++adapter srst delay 200
++jtag_ntrst_delay 100
++reset_config trst_and_srst separate srst_open_drain
++
++#
++# Configure Targets
++#
++
++source [find target/arm_n1.cfg]
+diff --git a/tcl/target/arm_n1.cfg b/tcl/target/arm_n1.cfg
+new file mode 100644
+index 000000000..915f8982c
+--- /dev/null
++++ b/tcl/target/arm_n1.cfg
+@@ -0,0 +1,159 @@
++#
++# OpenOCD Target Configuration for ARM Neoverse N1 Processor
++#
++# Copyright (c) 2019-2020, Ampere Computing LLC
++#
++# This program is free software; you can redistribute it and/or
++# modify it under the terms of the GNU General Public License as
++# published by the Free Software Foundation; either version 2 of
++# the License, or (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program;
++#
++#
++
++#
++# Configure defaults for target
++# Can be overriden in board configuration file
++#
++
++if { [info exists CHIPNAME] } {
++	set _CHIPNAME ${CHIPNAME}
++} else {
++	set _CHIPNAME n1soc
++}
++
++if { [info exists NUMCLUSTERS] } {
++	set _NUMCLUSTERS ${NUMCLUSTERS}
++} else {
++	set _NUMCLUSTERS 2
++}
++
++if { [info exists NUMCORESPERCLUSTER] } {
++	set _NUMCORESPERCLUSTER ${NUMCORESPERCLUSTER}
++} else {
++	set _NUMCORESPERCLUSTER 2
++}
++
++if { [info exists ENDIAN] } {
++	set _ENDIAN ${ENDIAN}
++} else {
++	set _ENDIAN little
++}
++
++if { [info exists CPUTAPID ] } {
++	set _CPUTAPID ${CPUTAPID}
++} else {
++	set _CPUTAPID 0x6BA00477
++}
++
++#
++# Configure JTAG TAP
++#
++
++jtag newtap ${_CHIPNAME} m7 -irlen 4 -ircapture 0x1 -irmask 0x3 -expected-id $_CPUTAPID
++set _TAPNAME0 ${_CHIPNAME}.m7
++
++jtag newtap ${_CHIPNAME} n1 -irlen 4 -ircapture 0x1 -irmask 0x3 -expected-id $_CPUTAPID
++set _TAPNAME1 ${_CHIPNAME}.n1
++
++set _DAPNAME0 ${_CHIPNAME}_m7.dap
++set _DAPNAME1 ${_CHIPNAME}_n1.dap
++
++# M7 CPUs
++set _APNUM_M7_0 0
++set _APNUM_M7_1 1
++#dap create ${_DAPNAME0} -v6 -chain-position ${_TAPNAME0}
++dap create ${_DAPNAME0} -chain-position ${_TAPNAME0}
++
++# N1 CPUs
++set _APNUM_ARES 0
++#dap create ${_DAPNAME1} -v6 -chain-position ${_TAPNAME1}
++dap create ${_DAPNAME1} -chain-position ${_TAPNAME1}
++#${_DAPNAME1} apsel ${_APNUM_ARES}
++
++# Create the DAP0 AP0 AHB-AP MEM-AP target for the first M7 instance
++target create AHB0 mem_ap -endian $_ENDIAN -dap ${_DAPNAME0} -ap-num 0
++
++# Create the DAP0 AP1 AHB-AP MEM-AP target for the second M7 instance
++target create AHB1 mem_ap -endian $_ENDIAN -dap ${_DAPNAME0} -ap-num 1
++
++# ARM M7 core setup
++# Configure which TAP to use
++
++# Create the M7 SCP target
++set _SMP_STR "target smp"
++set _TARGETNAME ${_TAPNAME0}_0
++eval [format "target create ${_TARGETNAME} cortex_m -endian $_ENDIAN -dap ${_DAPNAME0} -ap-num ${_APNUM_M7_0} -dbgbase 0x%08X -rtos hwthread -coreid 0" [expr 0xE000ED00]]
++puts [format "target create ${_TARGETNAME} cortex_m -endian $_ENDIAN -dap ${_DAPNAME0} -ap-num ${_APNUM_M7_0} -dbgbase 0x%08X -rtos hwthread -coreid 0" [expr 0xE000ED00]]
++set _SMP_STR "${_SMP_STR} ${_TARGETNAME}"
++
++# Create the M7 MCP target
++set _TARGETNAME ${_TAPNAME0}_1
++eval [format "target create ${_TARGETNAME} cortex_m -endian $_ENDIAN -dap ${_DAPNAME0} -ap-num ${_APNUM_M7_1} -dbgbase 0x%08X -rtos hwthread -coreid 1" [expr 0xE000ED00]]
++puts [format "target create ${_TARGETNAME} cortex_m -endian $_ENDIAN -dap ${_DAPNAME0} -ap-num ${_APNUM_M7_1} -dbgbase 0x%08X -rtos hwthread -coreid 1" [expr 0xE000ED00]]
++set _SMP_STR "${_SMP_STR} ${_TARGETNAME}"
++
++eval ${_SMP_STR}
++
++# Create the DAP1 AP0 APB-AP MEM-AP target for the N1 cores
++target create APB mem_ap -endian $_ENDIAN -dap ${_DAPNAME1} -ap-num 0
++
++# Create the DAP1 AP1 AXI-AP MEM-AP target for the N1 cores
++target create AXI mem_ap -endian $_ENDIAN -dap ${_DAPNAME1} -ap-num 1
++
++#
++# Configure target CPUs
++#
++
++# Build string used to enable smp mode
++set _SMP_STR "target smp"
++
++set _index 0
++for {set _i 0} {$_i < $_NUMCLUSTERS} {incr _i} {
++	for {set _j 0} {$_j < $_NUMCORESPERCLUSTER} {incr _j} {
++		# Configure which TAP to use
++		eval [format "set _TARGETNAME ${_TAPNAME1}_%02d" $_index]
++
++		# Create and configure Cross Trigger Interface (CTI) - required for halt and resume
++		set _CTINAME ${_TARGETNAME}.cti
++		eval [format "cti create ${_CTINAME} -dap ${_DAPNAME1} -ap-num ${_APNUM_ARES} -baseaddr 0x%08X" [expr 0x82020000 + ($_i << 24) + ($_j << 20)]]
++		puts [format "cti create ${_CTINAME} -dap ${_DAPNAME1} -ap-num ${_APNUM_ARES} -baseaddr 0x%08X" [expr 0x82020000 + ($_i << 24) + ($_j << 20)]]
++
++		# Create the target
++		eval [format "target create ${_TARGETNAME} aarch64 -endian $_ENDIAN -dap ${_DAPNAME1} -ap-num ${_APNUM_ARES} -dbgbase 0x%08X -rtos hwthread -cti ${_CTINAME} -coreid %d" [expr 0x82010000 + ($_i << 24) + ($_j << 20)] $_index]
++		puts [format "target create ${_TARGETNAME} aarch64 -endian $_ENDIAN -dap ${_DAPNAME1} -ap-num ${_APNUM_ARES} -dbgbase 0x%08X -rtos hwthread -cti ${_CTINAME} -coreid %d" [expr 0x82010000 + ($_i << 24) + ($_j << 20)] $_index]
++		set _SMP_STR "${_SMP_STR} ${_TARGETNAME}"
++
++		# Clear CTI output/input enables that are not configured by OpenOCD for aarch64
++		${_TARGETNAME} configure -event reset-init [subst {
++			${_CTINAME} write INEN0 0x00000000
++			${_CTINAME} write INEN1 0x00000000
++			${_CTINAME} write INEN2 0x00000000
++			${_CTINAME} write INEN3 0x00000000
++			${_CTINAME} write INEN4 0x00000000
++			${_CTINAME} write INEN5 0x00000000
++			${_CTINAME} write INEN6 0x00000000
++			${_CTINAME} write INEN7 0x00000000
++			${_CTINAME} write INEN8 0x00000000
++
++			${_CTINAME} write OUTEN2 0x00000000
++			${_CTINAME} write OUTEN3 0x00000000
++			${_CTINAME} write OUTEN4 0x00000000
++			${_CTINAME} write OUTEN5 0x00000000
++			${_CTINAME} write OUTEN6 0x00000000
++			${_CTINAME} write OUTEN7 0x00000000
++			${_CTINAME} write OUTEN8 0x00000000
++		}]
++
++		incr _index
++	}
++}
++
++eval ${_SMP_STR}
+-- 
+2.25.1
+
