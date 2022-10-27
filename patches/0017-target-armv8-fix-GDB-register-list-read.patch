@@ -1,0 +1,173 @@
+From b70c9e25724ea02dc7bc3bd70ab7a6e04d9ff48a Mon Sep 17 00:00:00 2001
+From: Kevin Burke <kevinb@os.amperecomputing.com>
+Date: Fri, 3 Apr 2020 22:49:58 -0400
+Subject: [PATCH 17/32] target/armv8: fix GDB register list read
+
+This change provides GDB with current values of all general registers
+
+Tested on an Ampere eMAG8180 and Quicksilver silicon
+
+Change-Id: I8c91aa5727350f3967aab09c6a379061387c565f
+Signed-off-by: Kevin Burke <kevinb@os.amperecomputing.com>
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/target/aarch64.c |   1 +
+ src/target/arm.h     |   3 ++
+ src/target/armv8.c   | 101 +++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 105 insertions(+)
+
+diff --git a/src/target/aarch64.c b/src/target/aarch64.c
+index cad49beda..204596758 100644
+--- a/src/target/aarch64.c
++++ b/src/target/aarch64.c
+@@ -3392,6 +3392,7 @@ struct target_type aarch64_target = {
+ 	/* REVISIT allow exporting VFP3 registers ... */
+ 	.get_gdb_arch = armv8_get_gdb_arch,
+ 	.get_gdb_reg_list = armv8_get_gdb_reg_list,
++	.get_gdb_reg_list_noread = armv8_get_gdb_reg_list_noread,
+ 
+ 	.read_memory = aarch64_read_memory,
+ 	.write_memory = aarch64_write_memory,
+diff --git a/src/target/arm.h b/src/target/arm.h
+index fcebd6c2b..9a700dc7c 100644
+--- a/src/target/arm.h
++++ b/src/target/arm.h
+@@ -298,6 +298,9 @@ const char *armv8_get_gdb_arch(struct target *target);
+ int armv8_get_gdb_reg_list(struct target *target,
+ 		struct reg **reg_list[], int *reg_list_size,
+ 		enum target_register_class reg_class);
++int armv8_get_gdb_reg_list_noread(struct target *target,
++		struct reg **reg_list[], int *reg_list_size,
++		enum target_register_class reg_class);
+ 
+ int arm_init_arch_info(struct target *target, struct arm *arm);
+ 
+diff --git a/src/target/armv8.c b/src/target/armv8.c
+index de0bddb3e..88bced32b 100644
+--- a/src/target/armv8.c
++++ b/src/target/armv8.c
+@@ -5,6 +5,8 @@
+  *                                                                         *
+  *   Copyright (C) 2018 by Liviu Ionescu                                   *
+  *   <ilg@livius.net>                                                      *
++ *                                                                         *
++ *   Copyright (C) 2019-2020, Ampere Computing LLC                         *
+  ***************************************************************************/
+ 
+ #ifdef HAVE_CONFIG_H
+@@ -1702,6 +1704,43 @@ struct reg *armv8_reg_current(struct arm *arm, unsigned regnum)
+ 	return r;
+ }
+ 
++static struct reg *armv8_reg_current_read(struct arm *arm, unsigned regnum)
++{
++	struct reg *r;
++	int retval;
++
++
++	if (regnum > (ARMV8_LAST_REG - 1))
++		return NULL;
++
++	r = arm->core_cache->reg_list + regnum;
++	if (!r->valid) {
++		retval = r->type->get(r);
++		if (retval != ERROR_OK)
++			LOG_ERROR("Failure trying to read %s", r->name);
++	}
++
++	return r;
++}
++
++static struct reg *armv8_reg32_current_read(struct arm *arm, unsigned regnum)
++{
++	struct reg *r;
++	int retval;
++
++	if (regnum > (arm->core_cache->next->num_regs - 1))
++		return NULL;
++
++	r = arm->core_cache->next->reg_list + regnum;
++	if (!r->valid) {
++		retval = r->type->get(r);
++		if (retval != ERROR_OK)
++			LOG_ERROR("Failure trying to read %s", r->name);
++	}
++
++	return r;
++}
++
+ static void armv8_free_cache(struct reg_cache *cache, bool regs32)
+ {
+ 	struct reg *reg;
+@@ -1761,6 +1800,68 @@ int armv8_get_gdb_reg_list(struct target *target,
+ 	struct arm *arm = target_to_arm(target);
+ 	int i;
+ 
++	if (arm->core_state == ARM_STATE_AARCH64) {
++
++		LOG_DEBUG("Creating Aarch64 register list for target %s", target_name(target));
++
++		switch (reg_class) {
++		case REG_CLASS_GENERAL:
++			*reg_list_size = ARMV8_V0;
++			*reg_list = malloc(sizeof(struct reg *) * (*reg_list_size));
++
++			for (i = 0; i < *reg_list_size; i++)
++					(*reg_list)[i] = armv8_reg_current_read(arm, i);
++			return ERROR_OK;
++
++		case REG_CLASS_ALL:
++			*reg_list_size = ARMV8_LAST_REG;
++			*reg_list = malloc(sizeof(struct reg *) * (*reg_list_size));
++
++			for (i = 0; i < *reg_list_size; i++)
++					(*reg_list)[i] = armv8_reg_current_read(arm, i);
++
++			return ERROR_OK;
++
++		default:
++			LOG_ERROR("not a valid register class type in query.");
++			return ERROR_FAIL;
++		}
++	} else {
++		struct reg_cache *cache32 = arm->core_cache->next;
++
++		LOG_DEBUG("Creating Aarch32 register list for target %s", target_name(target));
++
++		switch (reg_class) {
++		case REG_CLASS_GENERAL:
++			*reg_list_size = ARMV8_R14 + 3;
++			*reg_list = malloc(sizeof(struct reg *) * (*reg_list_size));
++
++			for (i = 0; i < *reg_list_size; i++)
++				(*reg_list)[i] = armv8_reg32_current_read(arm, i);
++
++			return ERROR_OK;
++		case REG_CLASS_ALL:
++			*reg_list_size = cache32->num_regs;
++			*reg_list = malloc(sizeof(struct reg *) * (*reg_list_size));
++
++			for (i = 0; i < *reg_list_size; i++)
++				(*reg_list)[i] = armv8_reg32_current_read(arm, i);
++
++			return ERROR_OK;
++		default:
++			LOG_ERROR("not a valid register class type in query.");
++			return ERROR_FAIL;
++		}
++	}
++}
++
++int armv8_get_gdb_reg_list_noread(struct target *target,
++	struct reg **reg_list[], int *reg_list_size,
++	enum target_register_class reg_class)
++{
++	struct arm *arm = target_to_arm(target);
++	int i;
++
+ 	if (arm->core_state == ARM_STATE_AARCH64) {
+ 
+ 		LOG_DEBUG("Creating Aarch64 register list for target %s", target_name(target));
+-- 
+2.25.1
+

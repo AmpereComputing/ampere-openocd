@@ -1,0 +1,57 @@
+From 961ca87813a5ef6e3d98e9164ac4ede69895a92b Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Thu, 27 Oct 2022 14:28:11 -0600
+Subject: [PATCH 32/32] Revert "Remove duplicate of a counter in
+ hwthread_update_threads"
+
+This reverts commit 0cedf10f8fd618b78190ce32a40f26dec0fb8253.
+---
+ src/rtos/hwthread.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/src/rtos/hwthread.c b/src/rtos/hwthread.c
+index 504723c32..069729fb2 100644
+--- a/src/rtos/hwthread.c
++++ b/src/rtos/hwthread.c
+@@ -78,6 +78,7 @@ static int hwthread_fill_thread(struct rtos *rtos, struct target *curr, int thre
+ static int hwthread_update_threads(struct rtos *rtos)
+ {
+ 	int threads_found = 0;
++	int thread_list_size = 0;
+ 	struct target_list *head;
+ 	struct target *target;
+ 	int64_t current_thread = 0;
+@@ -101,13 +102,13 @@ static int hwthread_update_threads(struct rtos *rtos)
+ 			if (!target_was_examined(curr))
+ 				continue;
+ 
+-			++threads_found;
++			++thread_list_size;
+ 		}
+ 	} else
+-		threads_found = 1;
++		thread_list_size = 1;
+ 
+ 	/* create space for new thread details */
+-	rtos->thread_details = malloc(sizeof(struct thread_detail) * threads_found);
++	rtos->thread_details = malloc(sizeof(struct thread_detail) * thread_list_size);
+ 
+ 	if (target->smp) {
+ 		/* loop over all threads */
+@@ -172,10 +173,13 @@ static int hwthread_update_threads(struct rtos *rtos)
+ 			default:
+ 				break;
+ 			}
++
++			threads_found++;
+ 		}
+ 	} else {
+ 		hwthread_fill_thread(rtos, target, threads_found);
+ 		current_thread = threadid_from_target(target);
++		threads_found++;
+ 	}
+ 
+ 	rtos->thread_count = threads_found;
+-- 
+2.25.1
+

@@ -1,0 +1,47 @@
+From 8aab5c727868f2007cb1913626ff7b491bf29dc0 Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Fri, 14 Jan 2022 11:45:15 -0500
+Subject: [PATCH 24/32] target/armv8: enhanced defer_examine support
+
+Allow user to put a target back into the defer-examine state
+by executing the command "<target> arp_examine allow-defer"
+during a debug session. This can be useful if the user wants
+to detach from the target when performing a custom reset sequence.
+
+Change-Id: I41d5a31d83f180a1e5665f66bce9cf145e21eedc
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/target/armv8_dpm.c | 4 ++++
+ src/target/target.c    | 1 +
+ 2 files changed, 5 insertions(+)
+
+diff --git a/src/target/armv8_dpm.c b/src/target/armv8_dpm.c
+index 56fc83b16..3c1b56b86 100644
+--- a/src/target/armv8_dpm.c
++++ b/src/target/armv8_dpm.c
+@@ -1622,6 +1622,10 @@ int armv8_dpm_setup(struct arm_dpm *dpm)
+ 		cache = armv8_build_reg_cache(target);
+ 		if (!cache)
+ 			return ERROR_FAIL;
++	} else {
++		/* If prior register cache exists, invalidate it */
++		register_cache_invalidate(arm->core_cache);
++		register_cache_invalidate(arm->core_cache->next);
+ 	}
+ 
+ 	/* coprocessor access setup */
+diff --git a/src/target/target.c b/src/target/target.c
+index 783159fec..91e49b2be 100644
+--- a/src/target/target.c
++++ b/src/target/target.c
+@@ -5726,6 +5726,7 @@ static int jim_target_examine(Jim_Interp *interp, int argc, Jim_Obj *const *argv
+ 		return jim_target_tap_disabled(interp);
+ 
+ 	if (allow_defer && target->defer_examine) {
++		target_reset_examined(target);
+ 		LOG_INFO("Deferring arp_examine of %s", target_name(target));
+ 		LOG_INFO("Use arp_examine command to examine it manually!");
+ 		return JIM_OK;
+-- 
+2.25.1
+

@@ -1,0 +1,114 @@
+From 40b4ab510ca1cc169c2376dd1673b5da94ac5045 Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Fri, 7 May 2021 15:27:35 -0400
+Subject: [PATCH 01/32] build: Add Dockerfile and Ampere README files
+
+Change-Id: Ia9ae4963bdb6fc50939461753c5133a152aa93e2
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ Dockerfile    | 59 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ README.AMPERE | 26 +++++++++++++++++++++++
+ 2 files changed, 85 insertions(+)
+ create mode 100644 Dockerfile
+ create mode 100644 README.AMPERE
+
+diff --git a/Dockerfile b/Dockerfile
+new file mode 100644
+index 000000000..e737c9859
+--- /dev/null
++++ b/Dockerfile
+@@ -0,0 +1,59 @@
++# SPDX-License-Identifier: BSD-3-Clause
++# Copyright (c) 2021-2022, Ampere Computing LLC
++
++FROM docker.io/ubuntu:18.04
++
++RUN apt-get update -q && \
++    apt-get install -y --no-install-recommends sudo
++RUN adduser --disabled-password --gecos '' openocd && \
++    adduser openocd sudo && \
++    echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
++USER openocd
++RUN sudo apt-get update -q && \
++    sudo apt-get install -y --no-install-recommends \
++    libftdi-dev \
++    git \
++    libtool \
++    automake \
++    texinfo \
++    pkg-config \
++    libusb-1.0.0-dev \
++    vim \
++    net-tools \
++    usbutils \
++    libpython2.7 \
++    python2.7-minimal \
++    gdb \
++    ddd \
++    telnet \
++    libcapstone-dev \
++    ca-certificates
++
++COPY gcc-arm*/bin/aarch64-none-elf-gdb /usr/bin/
++COPY gcc-arm*/bin/aarch64-none-elf-gdb-add-index /usr/bin/
++
++COPY gcc-arm*/bin/aarch64-none-linux-gnu-gdb /usr/bin/
++COPY gcc-arm*/bin/aarch64-none-linux-gnu-gdb-add-index /usr/bin/
++
++COPY gcc-arm*/bin/arm-none-eabi-gdb /usr/bin/
++COPY gcc-arm*/bin/arm-none-eabi-gdb-add-index /usr/bin/
++
++COPY gcc-arm*/bin/arm-none-linux-gnueabihf-gdb /usr/bin/
++COPY gcc-arm*/bin/arm-none-linux-gnueabihf-gdb-add-index /usr/bin/
++
++COPY gcc-arm*/include/gdb /usr/include/gdb/
++COPY gcc-arm*/share/doc/gdb /usr/share/doc/gdb/
++COPY gcc-arm*/share/gdb /usr/share/gdb/
++COPY gcc-arm*/share/info/gdb.info /usr/share/info/
++
++COPY --chown=openocd:openocd openocd /home/openocd/openocd
++WORKDIR /home/openocd/openocd
++RUN mv README.AMPERE .. 2>/dev/null || true
++RUN ./bootstrap
++RUN ./configure --enable-vdebug --enable-jtag_dpi --enable-ftdi --enable-ft2232_ftd2xx --with-capstone
++RUN make
++RUN sudo make install
++RUN rm -rf .git
++WORKDIR /home/openocd
++
++EXPOSE 3333 3334 3335 3336 3337 3338 4444 4445 5555 5556 6666
+diff --git a/README.AMPERE b/README.AMPERE
+new file mode 100644
+index 000000000..7db9ad8ae
+--- /dev/null
++++ b/README.AMPERE
+@@ -0,0 +1,26 @@
++This Docker container was built by Ampere Computing using an internal and
++proprietary build process. This container was built using sources from open source
++as well as closed source projects.
++
++The base layer of this container was built using the Ubuntu 18.04 image
++as hosted by DockerHub.
++
++A number of packages were installed using the standard apt package manager. These
++can be discovered using the ```sudo apt list --installed``` command (or equivalent).
++
++In addition to packages installed via the standard Ubuntu package repository,
++the following projects were directly added to this container:
++
++ - OpenOCD With Ampere Patches
++   Placed at location: /home/openocd/openocd/, /home/openocd/openocd/patches/
++
++ - Ampere OpenOCD Dockerfile
++   Placed at location: /home/openocd/openocd/Dockerfile
++   This file is distributed under the BSD-3-Clause license. Full license text for the
++   BSD-3-Clause license can be found at /home/openocd/openocd/LICENSES/preferred/BSD-3-Clause
++
++ - Arm GNU Toolchain
++   Placed at locations: /usr/bin, /usr/include/gdb, /usr/share/, /usr/share/gdb/,
++   /usr/share/doc/gdb/, /usr/share/info/
++   This toolchain is included without modifications and as distributed by Arm at
++   this page: https://developer.arm.com/tools-and-software/open-source-software/developer-tools/gnu-toolchain/gnu-a/downloads/10-3-2021-07
+-- 
+2.25.1
+
