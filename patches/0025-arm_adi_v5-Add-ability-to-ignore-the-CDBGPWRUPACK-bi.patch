@@ -1,0 +1,106 @@
+From 7c4fef5c2bc5e6f41e5b5c984ae70657394d411d Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Wed, 2 Feb 2022 17:45:13 -0800
+Subject: [PATCH 25/38] arm_adi_v5: Add ability to ignore the CDBGPWRUPACK bit
+
+The CTRL/STAT register in the ARM DAP DP has a debug power up
+ack bit and a system power up ack bit. To avoid having the
+initial target examination fail due to a hardware bug
+the user can now specify that this bit should be ignored.
+
+Change-Id: I1173b965e2c45c3f7025e8fb982c975b060698cf
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/target/adi_v5_jtag.c |  4 +++-
+ src/target/arm_adi_v5.c  | 14 ++++++++------
+ src/target/arm_adi_v5.h  |  3 +++
+ src/target/arm_dap.c     |  5 +++++
+ 4 files changed, 19 insertions(+), 7 deletions(-)
+
+diff --git a/src/target/adi_v5_jtag.c b/src/target/adi_v5_jtag.c
+index eeb796be4..f1473edb9 100644
+--- a/src/target/adi_v5_jtag.c
++++ b/src/target/adi_v5_jtag.c
+@@ -650,7 +650,9 @@ static int jtagdp_transaction_endcheck(struct adiv5_dap *dap)
+ 	if (ctrlstat & SSTICKYERR) {
+ 		LOG_DEBUG("jtag-dp: CTRL/STAT 0x%" PRIx32, ctrlstat);
+ 		/* Check power to debug regions */
+-		pwrmask = CDBGPWRUPREQ | CDBGPWRUPACK | CSYSPWRUPREQ;
++		pwrmask = CDBGPWRUPREQ | CSYSPWRUPREQ;
++		if (!dap->ignore_dbgpwrupack)
++			pwrmask |= CDBGPWRUPACK;
+ 		if (!dap->ignore_syspwrupack)
+ 			pwrmask |= CSYSPWRUPACK;
+ 		if ((ctrlstat & pwrmask) != pwrmask) {
+diff --git a/src/target/arm_adi_v5.c b/src/target/arm_adi_v5.c
+index 471d196c6..9818b521a 100644
+--- a/src/target/arm_adi_v5.c
++++ b/src/target/arm_adi_v5.c
+@@ -798,12 +798,14 @@ int dap_dp_init(struct adiv5_dap *dap)
+ 		return retval;
+ 
+ 	/* Check that we have debug power domains activated */
+-	LOG_DEBUG("DAP: wait CDBGPWRUPACK");
+-	retval = dap_dp_poll_register(dap, DP_CTRL_STAT,
+-				      CDBGPWRUPACK, CDBGPWRUPACK,
+-				      DAP_POWER_DOMAIN_TIMEOUT);
+-	if (retval != ERROR_OK)
+-		return retval;
++	if (!dap->ignore_dbgpwrupack) {
++		LOG_DEBUG("DAP: wait CDBGPWRUPACK");
++		retval = dap_dp_poll_register(dap, DP_CTRL_STAT,
++					      CDBGPWRUPACK, CDBGPWRUPACK,
++					      DAP_POWER_DOMAIN_TIMEOUT);
++		if (retval != ERROR_OK)
++			return retval;
++	}
+ 
+ 	if (!dap->ignore_syspwrupack) {
+ 		LOG_DEBUG("DAP: wait CSYSPWRUPACK");
+diff --git a/src/target/arm_adi_v5.h b/src/target/arm_adi_v5.h
+index fa3ab1cb6..975617bea 100644
+--- a/src/target/arm_adi_v5.h
++++ b/src/target/arm_adi_v5.h
+@@ -391,6 +391,9 @@ struct adiv5_dap {
+ 	 */
+ 	bool do_reconnect;
+ 
++	/** Flag saying whether to ignore the dbgpwrupack flag in DAP. */
++	bool ignore_dbgpwrupack;
++
+ 	/** Flag saying whether to ignore the syspwrupack flag in DAP. Some devices
+ 	 *  do not set this bit until later in the bringup sequence */
+ 	bool ignore_syspwrupack;
+diff --git a/src/target/arm_dap.c b/src/target/arm_dap.c
+index e21136dd6..918448aaf 100644
+--- a/src/target/arm_dap.c
++++ b/src/target/arm_dap.c
+@@ -173,6 +173,7 @@ int dap_cleanup_all(void)
+ 
+ enum dap_cfg_param {
+ 	CFG_CHAIN_POSITION,
++	CFG_IGNORE_DBGPWRUPACK,
+ 	CFG_IGNORE_SYSPWRUPACK,
+ 	CFG_DP_ID,
+ 	CFG_INSTANCE_ID,
+@@ -182,6 +183,7 @@ enum dap_cfg_param {
+ 
+ static const struct jim_nvp nvp_config_opts[] = {
+ 	{ .name = "-chain-position",     .value = CFG_CHAIN_POSITION },
++	{ .name = "-ignore-dbgpwrupack", .value = CFG_IGNORE_DBGPWRUPACK },
+ 	{ .name = "-ignore-syspwrupack", .value = CFG_IGNORE_SYSPWRUPACK },
+ 	{ .name = "-dp-id",              .value = CFG_DP_ID },
+ 	{ .name = "-instance-id",        .value = CFG_INSTANCE_ID },
+@@ -221,6 +223,9 @@ static int dap_configure(struct jim_getopt_info *goi, struct arm_dap_object *dap
+ 			/* loop for more */
+ 			break;
+ 		}
++		case CFG_IGNORE_DBGPWRUPACK:
++			dap->dap.ignore_dbgpwrupack = true;
++			break;
+ 		case CFG_IGNORE_SYSPWRUPACK:
+ 			dap->dap.ignore_syspwrupack = true;
+ 			break;
+-- 
+2.25.1
+

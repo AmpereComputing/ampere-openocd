@@ -1,0 +1,45 @@
+From 76ac1d51cb617ecc8784582f8661a106442e4bad Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Mon, 23 May 2022 19:07:51 -0400
+Subject: [PATCH 02/38] Cadence vdebug interface updates [DO NOT UPSTREAM]
+
+Change-Id: I968c005e524b40b9642d03f27fb900304c639e28
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/jtag/drivers/vdebug.c | 2 +-
+ tcl/interface/vdebug.cfg  | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/jtag/drivers/vdebug.c b/src/jtag/drivers/vdebug.c
+index 7898e9d9b..d55b9b9ef 100644
+--- a/src/jtag/drivers/vdebug.c
++++ b/src/jtag/drivers/vdebug.c
+@@ -53,7 +53,7 @@
+ #include "helper/log.h"
+ #include "helper/list.h"
+ 
+-#define VD_VERSION 44
++#define VD_VERSION 42
+ #define VD_BUFFER_LEN 4024
+ #define VD_CHEADER_LEN 24
+ #define VD_SHEADER_LEN 16
+diff --git a/tcl/interface/vdebug.cfg b/tcl/interface/vdebug.cfg
+index 7350bb9a9..9faa5bd11 100644
+--- a/tcl/interface/vdebug.cfg
++++ b/tcl/interface/vdebug.cfg
+@@ -21,10 +21,10 @@ vdebug server $_VDEBUGHOST:$_VDEBUGPORT
+ #log_output vd_ocd.log
+ 
+ # example config listen on all interfaces, disable tcl/telnet server
+-bindto 0.0.0.0
++#bindto 0.0.0.0
+ #gdb_port 3333
+ #telnet_port disabled
+-tcl_port disabled
++#tcl_port disabled
+ 
+ # transaction batching: 0 - no batching, 1 - (default) wr, 2 - rw
+ vdebug batching 1
+-- 
+2.25.1
+
