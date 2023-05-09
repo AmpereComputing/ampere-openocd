@@ -1,0 +1,28 @@
+From f6bb37801bf4eec70db1198707652d16ea183feb Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Sat, 19 Feb 2022 03:59:56 +0000
+Subject: [PATCH 18/31] jtag: JTAG Driver remote debug
+
+With the latest Linux JTAG driver, hardware accelerated mode isn't
+working. There may be a bug in the Linux JTAG driver wrt hardware
+accelerated mode. Until HW mode is fixed, make software mode the default.
+
+Change-Id: Ibfc4540538432f572e0a56122e0d4dbce71069dc
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ tcl/interface/jtag_driver.cfg | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tcl/interface/jtag_driver.cfg b/tcl/interface/jtag_driver.cfg
+index 8238cb23c..4b4068548 100644
+--- a/tcl/interface/jtag_driver.cfg
++++ b/tcl/interface/jtag_driver.cfg
+@@ -16,4 +16,4 @@ if { [info exists JTAG_INSTANCE] } {
+ }
+ 
+ jtag_driver_set_instance $_JTAG_INSTANCE
+-jtag_driver_hw_accel 1
++jtag_driver_hw_accel 0
+-- 
+2.25.1
+

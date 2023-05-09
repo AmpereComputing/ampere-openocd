@@ -1,0 +1,62 @@
+From 52634ac7db4285867e295e26d8b9f466c4a1f0f6 Mon Sep 17 00:00:00 2001
+From: Anthony Ferranti <ferranti@os.amperecomputing.com>
+Date: Thu, 16 Apr 2020 15:21:14 -0400
+Subject: [PATCH 19/31] eMAG: Ampere eMAG user configs [DO NOT UPSTREAM]
+
+Add user configuration file for Ampere eMAG8180.
+Configured for the Olimex ARM-USB-OCD-H JTAG probe.
+
+https://www.olimex.com/Products/ARM/JTAG/ARM-USB-OCD-H/
+
+Tested on Ampere eMAG8180 Development Platform
+
+Change-Id: I3a31abeee8b73d4704f43bd2d9e1441e369913af
+Signed-off-by: Anthony Ferranti <ferranti@os.amperecomputing.com>
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ tcl/openocd.emag8180.cfg | 33 +++++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+ create mode 100644 tcl/openocd.emag8180.cfg
+
+diff --git a/tcl/openocd.emag8180.cfg b/tcl/openocd.emag8180.cfg
+new file mode 100644
+index 000000000..dc47c152d
+--- /dev/null
++++ b/tcl/openocd.emag8180.cfg
+@@ -0,0 +1,33 @@
++#
++# Example OpenOCD user configuration for eMAG Development Platform
++#
++# Copyright (c) 2019-2020, Ampere Computing LLC
++#
++# This program is free software; you can redistribute it and/or
++# modify it under the terms of the GNU General Public License as
++# published by the Free Software Foundation; either version 2 of
++# the License, or (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program;
++#
++#
++
++bindto 0.0.0.0
++
++#
++# Interface Configuration
++#
++
++source [find interface/ftdi/olimex-arm-usb-ocd-h.cfg]
++
++#
++# Board (Platform) Configuration
++#
++
++source [find board/ampere_emag8180.cfg]
+-- 
+2.25.1
+
