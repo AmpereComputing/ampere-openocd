@@ -26,6 +26,7 @@
 #include <helper/time_support.h>
 
 static enum aarch64_bpcnt_mode bpcnt_mode = AARCH64_BPCNT_OFF;
+static enum aarch64_wpcnt_mode wpcnt_mode = AARCH64_WPCNT_OFF;
 
 enum restart_mode {
 	RESTART_LAZY,
@@ -2809,6 +2810,10 @@ static int aarch64_examine_first(struct target *target)
 
 	/* Setup Watchpoint Register Pairs */
 	aarch64->wp_num = (uint32_t)((debug >> 20) & 0x0F) + 1;
+	if (aarch64->wpcnt_mode == AARCH64_WPCNT_ON) {
+		/* Reserve upper two watchpoints for implementation defined feature */
+		aarch64->wp_num -= 2;
+	}
 	aarch64->wp_num_available = aarch64->wp_num;
 	aarch64->wp_list = calloc(aarch64->wp_num, sizeof(struct aarch64_brp));
 	for (i = 0; i < aarch64->wp_num; i++) {
@@ -2875,6 +2880,7 @@ static int aarch64_init_arch_info(struct target *target,
 	aarch64->isrmasking_mode = AARCH64_ISRMASK_ON;
 	aarch64->step_only_mode = AARCH64_STEPONLY_OFF; /* resume smp cpus while stepping single cpu */
 	aarch64->bpcnt_mode = bpcnt_mode;
+	aarch64->wpcnt_mode = wpcnt_mode;
 	armv8->arm.dap = dap;
 
 	/* register arch-specific functions */
@@ -3227,6 +3233,13 @@ COMMAND_HANDLER(aarch64_bpcnt_command)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(aarch64_wpcnt_command)
+{
+	wpcnt_mode = AARCH64_WPCNT_ON;
+
+	return ERROR_OK;
+}
+
 COMMAND_HANDLER(aarch64_mcrmrc_command)
 {
 	bool is_mcr = false;
@@ -3566,21 +3579,32 @@ static const struct command_registration aarch64_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
-static const struct command_registration aarch64_bpcnt_handler[] = {
+static const struct command_registration aarch64_bpwpcnt_handler[] = {
 	{
-		.name = "bkpt_cnt",
+		.name = "bp_cnt",
 		.mode = COMMAND_CONFIG,
 		.help = "Enable Ampere implementation defined feature",
 		.usage = "",
 		.handler = aarch64_bpcnt_command,
 	},
+
+	{
+		.name = "wp_cnt",
+		.mode = COMMAND_CONFIG,
+		.help = "Enable Ampere implementation defined feature",
+		.usage = "",
+		.handler = aarch64_wpcnt_command,
+	},
+
 	COMMAND_REGISTRATION_DONE
 };
 
 int impdef_register_commands(struct command_context *cmd_ctx)
 {
-	return register_commands(cmd_ctx, NULL, aarch64_bpcnt_handler);
+	return register_commands(cmd_ctx, NULL, aarch64_bpwpcnt_handler);
 }
+
+
 
 struct target_type aarch64_target = {
 	.name = "aarch64",
