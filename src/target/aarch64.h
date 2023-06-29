@@ -45,6 +45,11 @@ enum aarch64_bpcnt_mode {
 	AARCH64_BPCNT_ON,
 };
 
+enum aarch64_wpcnt_mode {
+	AARCH64_WPCNT_OFF,
+	AARCH64_WPCNT_ON,
+};
+
 struct aarch64_brp {
 	int used;
 	int type;
@@ -80,6 +85,8 @@ struct aarch64_common {
 	enum aarch64_cti_mode cti_mode;
 
 	enum aarch64_bpcnt_mode bpcnt_mode;
+
+	enum aarch64_wpcnt_mode wpcnt_mode;
 };
 
 static inline struct aarch64_common *
