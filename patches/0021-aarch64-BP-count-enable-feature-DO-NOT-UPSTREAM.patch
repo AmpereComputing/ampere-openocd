@@ -1,0 +1,164 @@
+From 83e3d5992abdfb919eb9d1fc499bbf3698c0721b Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Thu, 28 Jul 2022 19:06:19 -0600
+Subject: [PATCH 21/34] aarch64: BP count enable feature [DO NOT UPSTREAM]
+
+Add support for Ampere's implementation defined HW BP count enable
+feature.
+
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Change-Id: I4ac2057802fcbb97a0a33e0fcda0a0601ce5e95a
+---
+ src/openocd.c        |  2 ++
+ src/target/aarch64.c | 44 ++++++++++++++++++++++++++++++++++++++++----
+ src/target/aarch64.h |  9 +++++++++
+ 3 files changed, 51 insertions(+), 4 deletions(-)
+
+diff --git a/src/openocd.c b/src/openocd.c
+index 54c5eb34f..088c881d7 100644
+--- a/src/openocd.c
++++ b/src/openocd.c
+@@ -24,6 +24,7 @@
+ #include <flash/nor/core.h>
+ #include <flash/nand/core.h>
+ #include <pld/pld.h>
++#include <target/aarch64.h>
+ #include <target/arm_cti.h>
+ #include <target/arm_adi_v5.h>
+ #include <target/arm_tpiu_swo.h>
+@@ -256,6 +257,7 @@ static struct command_context *setup_command_handler(Jim_Interp *interp)
+ 		&cti_register_commands,
+ 		&dap_register_commands,
+ 		&arm_tpiu_swo_register_commands,
++		&impdef_register_commands,
+ 		NULL
+ 	};
+ 	for (unsigned i = 0; command_registrants[i]; i++) {
+diff --git a/src/target/aarch64.c b/src/target/aarch64.c
+index 5c336df75..337b8ca14 100644
+--- a/src/target/aarch64.c
++++ b/src/target/aarch64.c
+@@ -25,6 +25,8 @@
+ #include <helper/nvp.h>
+ #include <helper/time_support.h>
+ 
++static enum aarch64_bpcnt_mode bpcnt_mode = AARCH64_BPCNT_OFF;
++
+ enum restart_mode {
+ 	RESTART_LAZY,
+ 	RESTART_SYNC,
+@@ -2774,13 +2776,17 @@ static int aarch64_examine_first(struct target *target)
+ 
+ 	armv8->cti = pc->cti;
+ 
+-	retval = aarch64_dpm_setup(aarch64, debug);
+-	if (retval != ERROR_OK)
+-		return retval;
+-
+ 	/* Setup Breakpoint Register Pairs */
+ 	aarch64->brp_num = (uint32_t)((debug >> 12) & 0x0F) + 1;
+ 	aarch64->brp_num_context = (uint32_t)((debug >> 28) & 0x0F) + 1;
++	if (aarch64->bpcnt_mode == AARCH64_BPCNT_ON) {
++		/* Reserve upper two breakpoints for implementation defined feature */
++		aarch64->brp_num -= 2;
++		if (aarch64->brp_num_context == 1)
++			aarch64->brp_num_context = 0;
++		else
++			aarch64->brp_num_context -= 2;
++	}
+ 	aarch64->brp_num_available = aarch64->brp_num;
+ 	aarch64->brp_list = calloc(aarch64->brp_num, sizeof(struct aarch64_brp));
+ 	for (i = 0; i < aarch64->brp_num; i++) {
+@@ -2806,6 +2812,12 @@ static int aarch64_examine_first(struct target *target)
+ 		aarch64->wp_list[i].brpn = i;
+ 	}
+ 
++	debug = (debug & ~0x0000F000ULL) | ((aarch64->brp_num - 1) << 12);
++	debug = (debug & ~0x00F00000ULL) | ((aarch64->wp_num - 1) << 20);
++	retval = aarch64_dpm_setup(aarch64, debug);
++	if (retval != ERROR_OK)
++		return retval;
++
+ 	LOG_DEBUG("Configured %i hw breakpoints, %i watchpoints",
+ 		aarch64->brp_num, aarch64->wp_num);
+ 
+@@ -2852,6 +2864,7 @@ static int aarch64_init_arch_info(struct target *target,
+ 	aarch64->cti_mode = AARCH64_CTIMODE_LEGACY;	/* default to legacy */
+ 	aarch64->isrmasking_mode = AARCH64_ISRMASK_ON;
+ 	aarch64->step_only_mode = AARCH64_STEPONLY_OFF; /* resume smp cpus while stepping single cpu */
++	aarch64->bpcnt_mode = bpcnt_mode;
+ 	armv8->arm.dap = dap;
+ 
+ 	/* register arch-specific functions */
+@@ -3194,6 +3207,13 @@ COMMAND_HANDLER(aarch64_cti_mode)
+ 	return ERROR_OK;
+ }
+ 
++COMMAND_HANDLER(aarch64_bpcnt_command)
++{
++	bpcnt_mode = AARCH64_BPCNT_ON;
++
++	return ERROR_OK;
++}
++
+ COMMAND_HANDLER(aarch64_mcrmrc_command)
+ {
+ 	bool is_mcr = false;
+@@ -3531,6 +3551,22 @@ static const struct command_registration aarch64_command_handlers[] = {
+ 	COMMAND_REGISTRATION_DONE
+ };
+ 
++static const struct command_registration aarch64_bpcnt_handler[] = {
++	{
++		.name = "bkpt_cnt",
++		.mode = COMMAND_CONFIG,
++		.help = "Enable Ampere implementation defined feature",
++		.usage = "",
++		.handler = aarch64_bpcnt_command,
++	},
++	COMMAND_REGISTRATION_DONE
++};
++
++int impdef_register_commands(struct command_context *cmd_ctx)
++{
++	return register_commands(cmd_ctx, NULL, aarch64_bpcnt_handler);
++}
++
+ struct target_type aarch64_target = {
+ 	.name = "aarch64",
+ 
+diff --git a/src/target/aarch64.h b/src/target/aarch64.h
+index 4c715c4dd..6400e61d7 100644
+--- a/src/target/aarch64.h
++++ b/src/target/aarch64.h
+@@ -40,6 +40,11 @@ enum aarch64_cti_mode {
+ 	AARCH64_CTIMODE_EXTEND
+ };
+ 
++enum aarch64_bpcnt_mode {
++	AARCH64_BPCNT_OFF,
++	AARCH64_BPCNT_ON,
++};
++
+ struct aarch64_brp {
+ 	int used;
+ 	int type;
+@@ -73,6 +78,8 @@ struct aarch64_common {
+ 	enum aarch64_steponly_mode step_only_mode;
+ 
+ 	enum aarch64_cti_mode cti_mode;
++
++	enum aarch64_bpcnt_mode bpcnt_mode;
+ };
+ 
+ static inline struct aarch64_common *
+@@ -81,4 +88,6 @@ target_to_aarch64(struct target *target)
+ 	return container_of(target->arch_info, struct aarch64_common, armv8_common.arm);
+ }
+ 
++int impdef_register_commands(struct command_context *cmd_ctx);
++
+ #endif /* OPENOCD_TARGET_AARCH64_H */
+-- 
+2.25.1
+

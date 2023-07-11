@@ -1,0 +1,190 @@
+From 22b46c04a84499362da3651b96d455ed3279272f Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Fri, 10 Sep 2021 22:19:08 -0400
+Subject: [PATCH 14/34] target/aarch64: add ARMv8 64-bit access support
+
+Change-Id: I25490471e16943e5a67d7649595d77643aa9a095
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/target/aarch64.c       | 55 ++++++++++++++++++++++++++++++--------
+ src/target/armv8_opcodes.c |  2 ++
+ src/target/armv8_opcodes.h |  6 ++++-
+ 3 files changed, 51 insertions(+), 12 deletions(-)
+
+diff --git a/src/target/aarch64.c b/src/target/aarch64.c
+index d1d6a0065..52967202d 100644
+--- a/src/target/aarch64.c
++++ b/src/target/aarch64.c
+@@ -2063,22 +2063,32 @@ static int aarch64_write_cpu_memory_slow(struct target *target,
+ 	}
+ 
+ 	while (count) {
+-		uint32_t data, opcode;
++		uint32_t opcode;
++		uint64_t data;
+ 
+-		/* write the data to store into DTRRX */
++		/* write the data to store into DTRRX (and DTRTX for 64-bit) */
+ 		if (size == 1)
+ 			data = *buffer;
+ 		else if (size == 2)
+ 			data = target_buffer_get_u16(target, buffer);
+-		else
++		else if (size == 4)
+ 			data = target_buffer_get_u32(target, buffer);
++		else
++			data = target_buffer_get_u64(target, buffer);
++
+ 		retval = mem_ap_write_atomic_u32(armv8->debug_ap,
+-				armv8->debug_base + CPUV8_DBG_DTRRX, data);
++				armv8->debug_base + CPUV8_DBG_DTRRX, (uint32_t)data);
++		if (retval == ERROR_OK && size > 4)
++			retval = mem_ap_write_atomic_u32(armv8->debug_ap,
++					armv8->debug_base + CPUV8_DBG_DTRTX, (uint32_t)(data >> 32));
+ 		if (retval != ERROR_OK)
+ 			return retval;
+ 
+ 		if (arm->core_state == ARM_STATE_AARCH64)
+-			retval = dpm->instr_execute(dpm, ARMV8_MRS(SYSTEM_DBG_DTRRX_EL0, 1));
++			if (size <= 4)
++				retval = dpm->instr_execute(dpm, ARMV8_MRS(SYSTEM_DBG_DTRRX_EL0, 1));
++			else
++				retval = dpm->instr_execute(dpm, ARMV8_MRS(SYSTEM_DBG_DBGDTR_EL0, 1));
+ 		else
+ 			retval = dpm->instr_execute(dpm, ARMV4_5_MRC(14, 0, 1, 0, 5, 0));
+ 		if (retval != ERROR_OK)
+@@ -2088,8 +2098,11 @@ static int aarch64_write_cpu_memory_slow(struct target *target,
+ 			opcode = armv8_opcode(armv8, ARMV8_OPC_STRB_IP);
+ 		else if (size == 2)
+ 			opcode = armv8_opcode(armv8, ARMV8_OPC_STRH_IP);
+-		else
++		else if (size == 4)
+ 			opcode = armv8_opcode(armv8, ARMV8_OPC_STRW_IP);
++		else
++			opcode = armv8_opcode(armv8, ARMV8_OPC_STRD_IP);
++
+ 		retval = dpm->instr_execute(dpm, opcode);
+ 		if (retval != ERROR_OK)
+ 			return retval;
+@@ -2242,36 +2255,56 @@ static int aarch64_read_cpu_memory_slow(struct target *target,
+ 	}
+ 
+ 	while (count) {
+-		uint32_t opcode, data;
++		uint32_t opcode;
++		uint32_t lower;
++		uint32_t higher;
++		uint64_t data;
+ 
+ 		if (size == 1)
+ 			opcode = armv8_opcode(armv8, ARMV8_OPC_LDRB_IP);
+ 		else if (size == 2)
+ 			opcode = armv8_opcode(armv8, ARMV8_OPC_LDRH_IP);
+-		else
++		else if (size == 4)
+ 			opcode = armv8_opcode(armv8, ARMV8_OPC_LDRW_IP);
++		else
++			opcode = armv8_opcode(armv8, ARMV8_OPC_LDRD_IP);
++
+ 		retval = dpm->instr_execute(dpm, opcode);
+ 		if (retval != ERROR_OK)
+ 			return retval;
+ 
+ 		if (arm->core_state == ARM_STATE_AARCH64)
+-			retval = dpm->instr_execute(dpm, ARMV8_MSR_GP(SYSTEM_DBG_DTRTX_EL0, 1));
++			if (size <= 4)
++				retval = dpm->instr_execute(dpm, ARMV8_MSR_GP(SYSTEM_DBG_DTRTX_EL0, 1));
++			else
++				retval = dpm->instr_execute(dpm, ARMV8_MSR_GP(SYSTEM_DBG_DBGDTR_EL0, 1));
+ 		else
+ 			retval = dpm->instr_execute(dpm, ARMV4_5_MCR(14, 0, 1, 0, 5, 0));
+ 		if (retval != ERROR_OK)
+ 			return retval;
+ 
+ 		retval = mem_ap_read_atomic_u32(armv8->debug_ap,
+-				armv8->debug_base + CPUV8_DBG_DTRTX, &data);
++				armv8->debug_base + CPUV8_DBG_DTRTX, &lower);
++		if (retval == ERROR_OK) {
++			if (size > 4)
++				retval = mem_ap_read_atomic_u32(armv8->debug_ap,
++						armv8->debug_base + CPUV8_DBG_DTRRX, &higher);
++			else
++				higher = 0;
++		}
+ 		if (retval != ERROR_OK)
+ 			return retval;
+ 
++		data = (uint64_t)lower | (uint64_t)higher << 32;
++
+ 		if (size == 1)
+ 			*buffer = (uint8_t)data;
+ 		else if (size == 2)
+ 			target_buffer_set_u16(target, buffer, (uint16_t)data);
++		else if (size == 4)
++			target_buffer_set_u32(target, buffer, (uint32_t)data);
+ 		else
+-			target_buffer_set_u32(target, buffer, data);
++			target_buffer_set_u64(target, buffer, data);
+ 
+ 		/* Advance */
+ 		buffer += size;
+diff --git a/src/target/armv8_opcodes.c b/src/target/armv8_opcodes.c
+index 7afcc5219..2635b3ec5 100644
+--- a/src/target/armv8_opcodes.c
++++ b/src/target/armv8_opcodes.c
+@@ -36,9 +36,11 @@ static const uint32_t a64_opcodes[ARMV8_OPC_NUM] = {
+ 		[ARMV8_OPC_LDRB_IP]	= ARMV8_LDRB_IP(1, 0),
+ 		[ARMV8_OPC_LDRH_IP]	= ARMV8_LDRH_IP(1, 0),
+ 		[ARMV8_OPC_LDRW_IP]	= ARMV8_LDRW_IP(1, 0),
++		[ARMV8_OPC_LDRD_IP]	= ARMV8_LDRD_IP(1, 0),
+ 		[ARMV8_OPC_STRB_IP]	= ARMV8_STRB_IP(1, 0),
+ 		[ARMV8_OPC_STRH_IP]	= ARMV8_STRH_IP(1, 0),
+ 		[ARMV8_OPC_STRW_IP]	= ARMV8_STRW_IP(1, 0),
++		[ARMV8_OPC_STRD_IP]	= ARMV8_STRD_IP(1, 0),
+ };
+ 
+ static const uint32_t t32_opcodes[ARMV8_OPC_NUM] = {
+diff --git a/src/target/armv8_opcodes.h b/src/target/armv8_opcodes.h
+index ff33e62f0..128217cc8 100644
+--- a/src/target/armv8_opcodes.h
++++ b/src/target/armv8_opcodes.h
+@@ -2,7 +2,7 @@
+ 
+ /*
+  * Copyright (C) 2015 by pierrr kuo <vichy.kuo@gmail.com>
+- * Copyright (C) 2019-2020, Ampere Computing LLC
++ * Copyright (C) 2019-2023, Ampere Computing LLC
+  */
+ 
+ #ifndef OPENOCD_TARGET_ARMV8_OPCODES_H
+@@ -179,6 +179,7 @@
+ #define ARMV8_LDRB_IP(rd, rn) (0x38401400 | (rn << 5) | rd)
+ #define ARMV8_LDRH_IP(rd, rn) (0x78402400 | (rn << 5) | rd)
+ #define ARMV8_LDRW_IP(rd, rn) (0xb8404400 | (rn << 5) | rd)
++#define ARMV8_LDRD_IP(rd, rn) (0xf8408400 | ((rn) << 5) | (rd))
+ 
+ #define ARMV8_LDRB_IP_T3(rd, rn) (0xf8100b01 | (rn << 16) | (rd << 12))
+ #define ARMV8_LDRH_IP_T3(rd, rn) (0xf8300b02 | (rn << 16) | (rd << 12))
+@@ -187,6 +188,7 @@
+ #define ARMV8_STRB_IP(rd, rn) (0x38001400 | (rn << 5) | rd)
+ #define ARMV8_STRH_IP(rd, rn) (0x78002400 | (rn << 5) | rd)
+ #define ARMV8_STRW_IP(rd, rn) (0xb8004400 | (rn << 5) | rd)
++#define ARMV8_STRD_IP(rd, rn) (0xf8008400 | ((rn) << 5) | (rd))
+ 
+ #define ARMV8_STRB_IP_T3(rd, rn) (0xf8000b01 | (rn << 16) | (rd << 12))
+ #define ARMV8_STRH_IP_T3(rd, rn) (0xf8200b02 | (rn << 16) | (rd << 12))
+@@ -224,9 +226,11 @@ enum armv8_opcode {
+ 	ARMV8_OPC_STRB_IP,
+ 	ARMV8_OPC_STRH_IP,
+ 	ARMV8_OPC_STRW_IP,
++	ARMV8_OPC_STRD_IP,
+ 	ARMV8_OPC_LDRB_IP,
+ 	ARMV8_OPC_LDRH_IP,
+ 	ARMV8_OPC_LDRW_IP,
++	ARMV8_OPC_LDRD_IP,
+ 	ARMV8_OPC_NUM,
+ };
+ 
+-- 
+2.25.1
+

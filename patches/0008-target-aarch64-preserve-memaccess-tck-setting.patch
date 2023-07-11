@@ -1,0 +1,47 @@
+From a048f2a4eaf6bbe7f20e39ca1552712f25c6490b Mon Sep 17 00:00:00 2001
+From: Kevin Burke <kevinb@os.amperecomputing.com>
+Date: Tue, 9 Feb 2021 18:11:08 -0500
+Subject: [PATCH 08/34] target/aarch64: preserve memaccess tck setting
+
+The default non-zero memaccess tck cycle setting
+is preserved during the first examination. The
+dap memaccess command can be used to change the
+default if a lower cycle count is desired. This
+change provides use of a larger, conservative
+initial tck cycle count which is useful in
+support of certain emulation environments.
+
+Testing performed on ARM ARES 4-core platform.
+
+Change-Id: I89501f98186e1dcd5f6afa7da8a202c6474588b6
+Signed-off-by: Kevin Burke <kevinb@os.amperecomputing.com>
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/target/aarch64.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/src/target/aarch64.c b/src/target/aarch64.c
+index fc2c2466b..ede903f1b 100644
+--- a/src/target/aarch64.c
++++ b/src/target/aarch64.c
+@@ -2585,7 +2585,16 @@ static int aarch64_examine_first(struct target *target)
+ 		return retval;
+ 	}
+ 
+-	armv8->debug_ap->memaccess_tck = 10;
++	/****************************************************/
++	/* Force the tck cycle count to 10 only if the      */
++	/* current setting is zero. This allows the default */
++	/* settings to be used which may be required in     */
++	/* emulation environments. Users can execute the dap*/
++	/* memaccess command to change the current setting  */
++	/* for each access port.                            */
++	/****************************************************/
++	if (!armv8->debug_ap->memaccess_tck)
++		armv8->debug_ap->memaccess_tck = 10;
+ 
+ 	if (!target->dbgbase_set) {
+ 		/* Lookup Processor DAP */
+-- 
+2.25.1
+

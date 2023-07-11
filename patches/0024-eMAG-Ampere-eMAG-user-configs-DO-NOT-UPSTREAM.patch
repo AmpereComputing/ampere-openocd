@@ -1,0 +1,49 @@
+From dc7ac1993b6fc744e2531bce0c5785651296172d Mon Sep 17 00:00:00 2001
+From: Anthony Ferranti <ferranti@os.amperecomputing.com>
+Date: Thu, 16 Apr 2020 15:21:14 -0400
+Subject: [PATCH 24/34] eMAG: Ampere eMAG user configs [DO NOT UPSTREAM]
+
+Add user configuration file for Ampere eMAG8180.
+Configured for the Olimex ARM-USB-OCD-H JTAG probe.
+
+https://www.olimex.com/Products/ARM/JTAG/ARM-USB-OCD-H/
+
+Tested on Ampere eMAG8180 Development Platform
+
+Change-Id: I3a31abeee8b73d4704f43bd2d9e1441e369913af
+Signed-off-by: Anthony Ferranti <ferranti@os.amperecomputing.com>
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ tcl/openocd.emag8180.cfg | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+ create mode 100644 tcl/openocd.emag8180.cfg
+
+diff --git a/tcl/openocd.emag8180.cfg b/tcl/openocd.emag8180.cfg
+new file mode 100644
+index 000000000..c841d1c85
+--- /dev/null
++++ b/tcl/openocd.emag8180.cfg
+@@ -0,0 +1,20 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Example OpenOCD user configuration for eMAG Development Platform
++#
++# Copyright (c) 2019-2023, Ampere Computing LLC
++#
++
++bindto 0.0.0.0
++
++#
++# Interface Configuration
++#
++
++source [find interface/ftdi/olimex-arm-usb-ocd-h.cfg]
++
++#
++# Board (Platform) Configuration
++#
++
++source [find board/ampere_emag8180.cfg]
+-- 
+2.25.1
+

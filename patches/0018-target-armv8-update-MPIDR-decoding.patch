@@ -1,0 +1,84 @@
+From 0bbbc48c34efaef2fe04a93446ada0aee6f3afb9 Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Tue, 18 Jan 2022 12:34:25 -0500
+Subject: [PATCH 18/34] target/armv8: update MPIDR decoding
+
+Update MPIDR decode to support the multithreading (MT) bit.
+If detected, socket, cluster, core and multithread numbers
+are displayed (affinity levels 0-3).
+
+Change-Id: I43569141fa0eef8ee8fc16c187a4af3c23e97db8
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/target/armv8.c | 25 +++++++++++++++++--------
+ src/target/armv8.h |  7 +++++--
+ 2 files changed, 22 insertions(+), 10 deletions(-)
+
+diff --git a/src/target/armv8.c b/src/target/armv8.c
+index beeba3761..7e2b45025 100644
+--- a/src/target/armv8.c
++++ b/src/target/armv8.c
+@@ -801,7 +801,7 @@ int armv8_read_mpidr(struct armv8_common *armv8)
+ 	int retval = ERROR_FAIL;
+ 	struct arm *arm = &armv8->arm;
+ 	struct arm_dpm *dpm = armv8->arm.dpm;
+-	uint32_t mpidr;
++	uint64_t mpidr;
+ 
+ 	retval = dpm->prepare(dpm);
+ 	if (retval != ERROR_OK)
+@@ -814,17 +814,26 @@ int armv8_read_mpidr(struct armv8_common *armv8)
+ 			return retval;
+ 	}
+ 
+-	retval = dpm->instr_read_data_r0(dpm, armv8_opcode(armv8, READ_REG_MPIDR), &mpidr);
++	retval = dpm->instr_read_data_r0_64(dpm, ARMV8_MRS(SYSTEM_MPIDR, 0), &mpidr);
+ 	if (retval != ERROR_OK)
+ 		goto done;
+ 	if (mpidr & 1U<<31) {
+ 		armv8->multi_processor_system = (mpidr >> 30) & 1;
+-		armv8->cluster_id = (mpidr >> 8) & 0xf;
+-		armv8->cpu_id = mpidr & 0x3;
+-		LOG_INFO("%s cluster %x core %x %s", target_name(armv8->arm.target),
+-			armv8->cluster_id,
+-			armv8->cpu_id,
+-			armv8->multi_processor_system == 0 ? "multi core" : "single core");
++		armv8->aff3 = (mpidr >> 32) & 0xff;
++		armv8->aff2 = (mpidr >> 16) & 0xff;
++		armv8->aff1 = (mpidr >> 8) & 0xff;
++		armv8->aff0 = mpidr & 0xff;
++		armv8->mt = (mpidr >> 24) & 0x1;
++		if (armv8->mt)
++			LOG_INFO("%s socket 0x%02" PRIx32 " cluster 0x%02" PRIx32 " core 0x%02" PRIx32
++				" thread 0x%02" PRIx32 " %s", target_name(armv8->arm.target),
++				armv8->aff3, armv8->aff2, armv8->aff1, armv8->aff0,
++				armv8->multi_processor_system == 0 ? "multi core" : "single core");
++		else
++			LOG_INFO("%s cluster %x core %x %s", target_name(armv8->arm.target),
++				armv8->aff1,
++				armv8->aff0,
++				armv8->multi_processor_system == 0 ? "multi core" : "single core");
+ 	} else
+ 		LOG_ERROR("mpidr not in multiprocessor format");
+ 
+diff --git a/src/target/armv8.h b/src/target/armv8.h
+index 5a52320b2..36ac9a46d 100644
+--- a/src/target/armv8.h
++++ b/src/target/armv8.h
+@@ -199,8 +199,11 @@ struct armv8_common {
+ 
+ 	/* mdir */
+ 	uint8_t multi_processor_system;
+-	uint8_t cluster_id;
+-	uint8_t cpu_id;
++	uint8_t aff3;
++	uint8_t aff2;
++	uint8_t aff1;
++	uint8_t aff0;
++	uint8_t mt;
+ 
+ 	/* armv8 aarch64 need below information for page translation */
+ 	uint8_t va_size;
+-- 
+2.25.1
+

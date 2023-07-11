@@ -1,0 +1,142 @@
+From 9d2aeb1d8d40a7e1410863f6228c209ddbcb3587 Mon Sep 17 00:00:00 2001
+From: Kevin Burke <kevinb@os.amperecomputing.com>
+Date: Tue, 9 Feb 2021 18:08:44 -0500
+Subject: [PATCH 07/34] target/armv8: fix DSCR polling
+
+Make sure the DSCR register read value is checked prior
+to the loop timeout. The original code performed a read
+of the DSCR but could timeout prior to checking the last
+register value.
+
+Tested on 4-core ARM ARES platform.
+
+Change-Id: I0387747178f4735fa20b71f7ea1dfe33c07fa2be
+Signed-off-by: Kevin Burke <kevinb@os.amperecomputing.com>
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/target/armv8_dpm.c | 63 ++++++++++++++++++++++--------------------
+ 1 file changed, 33 insertions(+), 30 deletions(-)
+
+diff --git a/src/target/armv8_dpm.c b/src/target/armv8_dpm.c
+index 79a267ba1..62bc540a8 100644
+--- a/src/target/armv8_dpm.c
++++ b/src/target/armv8_dpm.c
+@@ -83,21 +83,21 @@ static int dpmv8_read_dcc(struct armv8_common *armv8, uint32_t *data,
+ 
+ 	/* Wait for DTRRXfull */
+ 	long long then = timeval_ms();
+-	while ((dscr & DSCR_DTR_TX_FULL) == 0) {
+-		retval = mem_ap_read_atomic_u32(armv8->debug_ap,
+-				armv8->debug_base + CPUV8_DBG_DSCR,
+-				&dscr);
+-		if (retval != ERROR_OK)
+-			return retval;
++	while ((retval = mem_ap_read_atomic_u32(armv8->debug_ap,
++			armv8->debug_base + CPUV8_DBG_DSCR, &dscr)) == ERROR_OK) {
++		if ((dscr & DSCR_DTR_TX_FULL) != 0)
++			break;
+ 		if (timeval_ms() > then + 1000) {
+ 			LOG_ERROR("Timeout waiting for read dcc");
+ 			return ERROR_FAIL;
+ 		}
+ 	}
+-
+-	retval = mem_ap_read_atomic_u32(armv8->debug_ap,
++	if (retval == ERROR_OK) {
++		retval = mem_ap_read_atomic_u32(armv8->debug_ap,
+ 					    armv8->debug_base + CPUV8_DBG_DTRTX,
+ 					    data);
++	}
++
+ 	if (retval != ERROR_OK)
+ 		return retval;
+ 
+@@ -119,21 +119,21 @@ static int dpmv8_read_dcc_64(struct armv8_common *armv8, uint64_t *data,
+ 
+ 	/* Wait for DTRRXfull */
+ 	long long then = timeval_ms();
+-	while ((dscr & DSCR_DTR_TX_FULL) == 0) {
+-		retval = mem_ap_read_atomic_u32(armv8->debug_ap,
+-				armv8->debug_base + CPUV8_DBG_DSCR,
+-				&dscr);
+-		if (retval != ERROR_OK)
+-			return retval;
++	while ((retval = mem_ap_read_atomic_u32(armv8->debug_ap,
++			armv8->debug_base + CPUV8_DBG_DSCR, &dscr)) == ERROR_OK) {
++		if ((dscr & DSCR_DTR_TX_FULL) != 0)
++			break;
+ 		if (timeval_ms() > then + 1000) {
+ 			LOG_ERROR("Timeout waiting for DTR_TX_FULL, dscr = 0x%08" PRIx32, dscr);
+ 			return ERROR_FAIL;
+ 		}
+ 	}
+ 
+-	retval = mem_ap_read_atomic_u32(armv8->debug_ap,
++	if (retval == ERROR_OK) {
++		retval = mem_ap_read_atomic_u32(armv8->debug_ap,
+ 					    armv8->debug_base + CPUV8_DBG_DTRTX,
+ 					    (uint32_t *)data);
++	}
+ 	if (retval != ERROR_OK)
+ 		return retval;
+ 
+@@ -207,19 +207,21 @@ static int dpmv8_exec_opcode(struct arm_dpm *dpm,
+ 
+ 	/* Wait for InstrCompl bit to be set */
+ 	long long then = timeval_ms();
+-	while ((dscr & DSCR_ITE) == 0) {
+-		retval = mem_ap_read_atomic_u32(armv8->debug_ap,
+-				armv8->debug_base + CPUV8_DBG_DSCR, &dscr);
+-		if (retval != ERROR_OK) {
+-			LOG_ERROR("Could not read DSCR register, opcode = 0x%08" PRIx32, opcode);
+-			return retval;
+-		}
++	while ((retval = mem_ap_read_atomic_u32(armv8->debug_ap,
++			armv8->debug_base + CPUV8_DBG_DSCR, &dscr)) == ERROR_OK) {
++		if ((dscr & DSCR_ITE) != 0)
++			break;
+ 		if (timeval_ms() > then + 1000) {
+ 			LOG_ERROR("Timeout waiting for aarch64_exec_opcode");
+ 			return ERROR_FAIL;
+ 		}
+ 	}
+ 
++	if (retval != ERROR_OK) {
++		LOG_ERROR("Could not read DSCR register, opcode = 0x%08" PRIx32, opcode);
++		return retval;
++	}
++
+ 	if (armv8_dpm_get_core_state(dpm) != ARM_STATE_AARCH64)
+ 		opcode = T32_FMTITR(opcode);
+ 
+@@ -229,18 +231,19 @@ static int dpmv8_exec_opcode(struct arm_dpm *dpm,
+ 		return retval;
+ 
+ 	then = timeval_ms();
+-	do {
+-		retval = mem_ap_read_atomic_u32(armv8->debug_ap,
+-				armv8->debug_base + CPUV8_DBG_DSCR, &dscr);
+-		if (retval != ERROR_OK) {
+-			LOG_ERROR("Could not read DSCR register");
+-			return retval;
+-		}
++	while ((retval = mem_ap_read_atomic_u32(armv8->debug_ap,
++				armv8->debug_base + CPUV8_DBG_DSCR, &dscr)) == ERROR_OK) {
++		if ((dscr & DSCR_ITE) != 0)	/* Wait for InstrCompl bit to be set */
++			break;
+ 		if (timeval_ms() > then + 1000) {
+ 			LOG_ERROR("Timeout waiting for aarch64_exec_opcode");
+ 			return ERROR_FAIL;
+ 		}
+-	} while ((dscr & DSCR_ITE) == 0);	/* Wait for InstrCompl bit to be set */
++	}
++	if (retval != ERROR_OK) {
++		LOG_ERROR("Could not read DSCR register");
++		return retval;
++	}
+ 
+ 	/* update dscr and el after each command execution */
+ 	dpm->dscr = dscr;
+-- 
+2.25.1
+
