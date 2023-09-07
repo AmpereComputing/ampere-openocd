@@ -1,0 +1,183 @@
+From b8e7b099bcd2ea0e4a461b41f5eb96c32bb22ec9 Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Fri, 3 Apr 2020 19:45:29 -0400
+Subject: [PATCH 25/34] QS|MQ: target/board: Ampere QS|MQ boundary-scan configs
+ [DO NOT UPSTREAM]
+
+Add Ampere Altra and Ampere Altra Max
+target/board boundary-scan configuration files.
+
+The target configuration file supports silicon and emulation.
+The board configuration files support 1 and 2 socket platforms.
+
+Tested on Ampere Altra and Ampere Altra Max silicon
+
+Change-Id: Ib1b841c8dcb1c529ebf343c64732dc41d805eb89
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ tcl/board/ampere_qs_mq_1s_bs.cfg | 52 ++++++++++++++++++++++++++++++
+ tcl/board/ampere_qs_mq_2s_bs.cfg | 55 ++++++++++++++++++++++++++++++++
+ tcl/target/ampere_qs_mq_bs.cfg   | 30 +++++++++++++++++
+ 3 files changed, 137 insertions(+)
+ create mode 100644 tcl/board/ampere_qs_mq_1s_bs.cfg
+ create mode 100644 tcl/board/ampere_qs_mq_2s_bs.cfg
+ create mode 100644 tcl/target/ampere_qs_mq_bs.cfg
+
+diff --git a/tcl/board/ampere_qs_mq_1s_bs.cfg b/tcl/board/ampere_qs_mq_1s_bs.cfg
+new file mode 100644
+index 000000000..6f2791475
+--- /dev/null
++++ b/tcl/board/ampere_qs_mq_1s_bs.cfg
+@@ -0,0 +1,52 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# OpenOCD Board Configuration for Ampere Altra and
++# Ampere Altra Max processors
++#
++# Copyright (c) 2019-2023, Ampere Computing LLC
++#
++
++# Argument Description
++#
++# JTAGFREQ
++# Set the JTAG clock frequency
++# Syntax: -c "set JTAGFREQ {freq_in_khz}"
++#
++# SYSNAME
++# Set the system name
++# If not specified, defaults to "qs"
++# Syntax: -c "set SYSNAME {qs}"
++
++#
++# Configure JTAG speed
++#
++
++if { [info exists JTAGFREQ] } {
++	adapter speed $JTAGFREQ
++} else {
++	adapter speed 100
++}
++
++#
++# Set the system name
++#
++
++if { [info exists SYSNAME] } {
++	set _SYSNAME $SYSNAME
++} else {
++	set _SYSNAME qs
++}
++
++#
++# Configure Resets
++#
++
++jtag_ntrst_delay 100
++reset_config trst_only
++
++#
++# Configure Targets
++#
++
++set CHIPNAME ${_SYSNAME}0
++source [find target/ampere_qs_mq_bs.cfg]
+diff --git a/tcl/board/ampere_qs_mq_2s_bs.cfg b/tcl/board/ampere_qs_mq_2s_bs.cfg
+new file mode 100644
+index 000000000..518208977
+--- /dev/null
++++ b/tcl/board/ampere_qs_mq_2s_bs.cfg
+@@ -0,0 +1,55 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# OpenOCD Board Configuration for Ampere Altra and
++# Ampere Altra Max processors
++#
++# Copyright (c) 2019-2023, Ampere Computing LLC
++#
++
++# Argument Description
++#
++# JTAGFREQ
++# Set the JTAG clock frequency
++# Syntax: -c "set JTAGFREQ {freq_in_khz}"
++#
++# SYSNAME
++# Set the system name
++# If not specified, defaults to "qs"
++# Syntax: -c "set SYSNAME {qs}"
++
++#
++# Configure JTAG speed
++#
++
++if { [info exists JTAGFREQ] } {
++	adapter speed $JTAGFREQ
++} else {
++	adapter speed 100
++}
++
++#
++# Set the system name
++#
++
++if { [info exists SYSNAME] } {
++	set _SYSNAME $SYSNAME
++} else {
++	set _SYSNAME qs
++}
++
++#
++# Configure Resets
++#
++
++jtag_ntrst_delay 100
++reset_config trst_only
++
++#
++# Configure Targets
++#
++
++set CHIPNAME ${_SYSNAME}1
++source [find target/ampere_qs_mq_bs.cfg]
++
++set CHIPNAME ${_SYSNAME}0
++source [find target/ampere_qs_mq_bs.cfg]
+diff --git a/tcl/target/ampere_qs_mq_bs.cfg b/tcl/target/ampere_qs_mq_bs.cfg
+new file mode 100644
+index 000000000..432fdc02e
+--- /dev/null
++++ b/tcl/target/ampere_qs_mq_bs.cfg
+@@ -0,0 +1,30 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# OpenOCD Target Configuration for Ampere Altra and
++# Ampere Altra Max processors
++#
++# Copyright (c) 2019-2023, Ampere Computing LLC
++#
++
++#
++# Configure defaults for target
++# These settings can be overridden in the board configuration file
++#
++
++if { [info exists CHIPNAME] } {
++	set _CHIPNAME $CHIPNAME
++} else {
++	set _CHIPNAME qs
++}
++
++if { [info exists SOC_TAPID] } {
++	set _SOC_TAPID $SOC_TAPID
++} else {
++	set _SOC_TAPID 0x11080a2d
++}
++
++#
++# Configure JTAG TAPs
++#
++
++jtag newtap $_CHIPNAME soc.bs -irlen 8 -ircapture 0x1 -irmask 0x3 -expected-id $_SOC_TAPID
+-- 
+2.25.1
+

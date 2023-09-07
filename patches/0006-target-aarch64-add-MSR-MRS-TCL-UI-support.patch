@@ -1,0 +1,557 @@
+From cf381c1cb4e7b1163269758cee1570441bbce0de Mon Sep 17 00:00:00 2001
+From: Kevin Burke <kevinb@os.amperecomputing.com>
+Date: Tue, 14 Apr 2020 14:52:27 -0400
+Subject: [PATCH 06/34] target/aarch64: add MSR/MRS TCL/UI support
+
+Aarch64 has a new class of system registers that are accessed
+via the MRS/MSR assembly instructions. This update allows
+the user to read or write these registers regardless of
+exception level.
+
+Tested on an Ampere eMAG8180 and Quicksilver silicon
+
+Change-Id: I99cfc37ac756294fd9779c84e840037529ef304f
+Signed-off-by: Kevin Burke <kevinb@os.amperecomputing.com>
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/target/aarch64.c       | 150 +++++++++++++++++++++++++
+ src/target/arm.h           |  14 +++
+ src/target/armv8.h         |  10 ++
+ src/target/armv8_dpm.c     | 219 +++++++++++++++++++++++++++++++++++++
+ src/target/armv8_opcodes.h |  30 ++++-
+ 5 files changed, 420 insertions(+), 3 deletions(-)
+
+diff --git a/src/target/aarch64.c b/src/target/aarch64.c
+index 785684562..289e0df29 100644
+--- a/src/target/aarch64.c
++++ b/src/target/aarch64.c
+@@ -3140,6 +3140,142 @@ COMMAND_HANDLER(aarch64_mcrmrc_command)
+ 	return ERROR_OK;
+ }
+ 
++COMMAND_HANDLER(aarch64_msr_mrs)
++{
++	struct target *target = get_current_target(CMD_CTX);
++	struct armv8_common *armv8;
++	struct arm *arm;
++	int retval;
++	bool is_msr;
++	unsigned int arg_cnt;
++	uint32_t op0;
++	uint32_t op1;
++	uint32_t op2;
++	uint32_t crn;
++	uint32_t crm;
++	uint64_t value;
++	uint32_t ns_requested = MSRMRS_NOOPTION;
++	int index = 0;
++
++	if (!strcmp(CMD_NAME, "mrs")) {
++		is_msr = false;
++		arg_cnt = 5;
++	} else {
++		is_msr = true;
++		arg_cnt = 6;
++	}
++
++	/* check to see if user is specifying a security preference */
++	if (CMD_ARGC > 0) {
++		if (!strcmp(CMD_ARGV[0], "sec")) {
++			ns_requested = MSRMRS_SECURE;
++			arg_cnt++;
++			index++;
++		} else if (!strcmp(CMD_ARGV[0], "nsec")) {
++			ns_requested = MSRMRS_NONSECURE;
++			arg_cnt++;
++			index++;
++		} else if (!strcmp(CMD_ARGV[0], "asis")) {
++			ns_requested = MSRMRS_ASIS;
++			arg_cnt++;
++			index++;
++		}
++	}
++
++	if (arg_cnt != CMD_ARGC) {
++		LOG_ERROR("%s command failed: wrong number of arguments", CMD_NAME);
++		return ERROR_COMMAND_SYNTAX_ERROR;
++	}
++
++	if (!target) {
++		LOG_ERROR("%s: target not found", CMD_NAME);
++		return ERROR_FAIL;
++	}
++
++	if (!target_was_examined(target)) {
++		LOG_ERROR("%s: not yet examined", target_name(target));
++		return ERROR_FAIL;
++	}
++
++	armv8 = target_to_armv8(target);
++	if (!is_armv8(armv8)) {
++		LOG_ERROR("%s: not an ARMv8", target_name(target));
++		return ERROR_FAIL;
++	}
++
++	if (target->state != TARGET_HALTED) {
++		LOG_ERROR("%s: not halted", target_name(target));
++		return ERROR_TARGET_NOT_HALTED;
++	}
++
++	arm = &armv8->arm;
++	if (arm->core_state != ARM_STATE_AARCH64) {
++		LOG_ERROR("%s: is not in AArch64 state", target_name(target));
++		return ERROR_FAIL;
++	}
++
++	/* NOTE:  parameter sequence matches ARM instruction set usage:
++	 *      MSR <sec/nsec> op0, op1, rX, CRn, CRm, op2 ; write System Reg from rX
++	 *      MRS <sec/nsec> op0, op1, rX, CRn, CRm, op2 ; read System Reg into rX
++	 * The "rX" is necessarily omitted; it uses Tcl mechanisms.
++	 */
++	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[index++], op0);
++	if (op0 & ~0x3) {
++		LOG_ERROR("%s: %s %d out of range", CMD_NAME,
++			"op0", (int)op0);
++		return ERROR_FAIL;
++	}
++
++	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[index++], op1);
++	if (op1 & ~0x7) {
++		LOG_ERROR("%s: %s %d out of range", CMD_NAME,
++			"op1", (int)op1);
++		return ERROR_FAIL;
++	}
++
++	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[index++], crn);
++	if (crn & ~0xf) {
++		LOG_ERROR("%s: %s %d out of range", CMD_NAME,
++			"CRn", (int)crn);
++		return ERROR_FAIL;
++	}
++
++	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[index++], crm);
++	if (crm & ~0xf) {
++		LOG_ERROR("%s: %s %d out of range", CMD_NAME,
++			"CRm", (int)crm);
++		return ERROR_FAIL;
++	}
++
++	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[index++], op2);
++	if (op2 & ~0x7) {
++		LOG_ERROR("%s: %s %d out of range", CMD_NAME,
++			"op2", (int)op2);
++		return ERROR_FAIL;
++	}
++
++	value = 0;
++
++	if (is_msr) {
++		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[index], value);
++		/* NOTE: parameters reordered! */
++		/* ARMV8_MSR(ns, op0, op1, 0, CRn, CRm, op2) */
++		retval = arm->msr(target, ns_requested, op0, op1, op2, crn, crm, value);
++		if (retval != ERROR_OK)
++			LOG_ERROR("%s: error encountered writing the designated register", CMD_NAME);
++	} else {
++		/* NOTE: parameters reordered! */
++		/* ARMV8_MRS(ns, op0, op1, 0, CRn, CRm, op2) */
++		retval = arm->mrs(target, ns_requested, op0, op1, op2, crn, crm, &value);
++		if (retval == ERROR_OK)
++			command_print(CMD, "0x%16.16" PRIx64, value);
++		else
++			LOG_ERROR("%s: error encountered reading the designated register", CMD_NAME);
++	}
++
++	return retval;
++}
++
+ static const struct command_registration aarch64_exec_command_handlers[] = {
+ 	{
+ 		.name = "cache_info",
+@@ -3190,6 +3326,20 @@ static const struct command_registration aarch64_exec_command_handlers[] = {
+ 		.help = "read coprocessor register",
+ 		.usage = "cpnum op1 CRn CRm op2",
+ 	},
++	{
++		.name = "msr",
++		.mode = COMMAND_EXEC,
++		.handler = aarch64_msr_mrs,
++		.help = "write system register",
++		.usage = "['sec' | 'nsec' | ' ' | 'asis'] op0 op1 CRn CRm op2 value",
++	},
++	{
++		.name = "mrs",
++		.mode = COMMAND_EXEC,
++		.handler = aarch64_msr_mrs,
++		.help = "read system register",
++		.usage = "['sec' | 'nsec' | ' ' | 'asis'] op0 op1 CRn CRm op2",
++	},
+ 	{
+ 		.chain = smp_command_handlers,
+ 	},
+diff --git a/src/target/arm.h b/src/target/arm.h
+index 28e533019..fcf60c919 100644
+--- a/src/target/arm.h
++++ b/src/target/arm.h
+@@ -12,6 +12,8 @@
+  *
+  * Copyright (C) 2018 by Liviu Ionescu
+  *   <ilg@livius.net>
++ *
++ * Copyright (C) 2019-2023, Ampere Computing LLC
+  */
+ 
+ #ifndef OPENOCD_TARGET_ARM_H
+@@ -236,6 +238,18 @@ struct arm {
+ 			uint32_t crn, uint32_t crm,
+ 			uint32_t value);
+ 
++	/** Read system register.  */
++	int (*mrs)(struct target *target, uint32_t ns_requested, uint32_t op0,
++			uint32_t op1, uint32_t op2,
++			uint32_t crn, uint32_t crm,
++			uint64_t *value);
++
++	/** Write system register.  */
++	int (*msr)(struct target *target, uint32_t ns_requested, uint32_t op0,
++			uint32_t op1, uint32_t op2,
++			uint32_t crn, uint32_t crm,
++			uint64_t value);
++
+ 	void *arch_info;
+ 
+ 	/** For targets conforming to ARM Debug Interface v5,
+diff --git a/src/target/armv8.h b/src/target/armv8.h
+index f5aa21109..5a52320b2 100644
+--- a/src/target/armv8.h
++++ b/src/target/armv8.h
+@@ -2,6 +2,7 @@
+ 
+ /***************************************************************************
+  *   Copyright (C) 2015 by David Ung                                       *
++ *   Copyright (C) 2019-2020, Ampere Computing LLC                         *
+  ***************************************************************************/
+ 
+ #ifndef OPENOCD_TARGET_ARMV8_H
+@@ -192,6 +193,8 @@ struct armv8_common {
+ 	target_addr_t debug_base;
+ 	struct adiv5_ap *debug_ap;
+ 
++	enum arm_mode max_aarch64_el;
++
+ 	const uint32_t *opcodes;
+ 
+ 	/* mdir */
+@@ -243,9 +246,16 @@ static inline bool is_armv8(struct armv8_common *armv8)
+ 	return armv8->common_magic == ARMV8_COMMON_MAGIC;
+ }
+ 
++/* msr/mrs command options */
++#define MSRMRS_SECURE		0
++#define MSRMRS_NONSECURE	1
++#define MSRMRS_ASIS		2
++#define MSRMRS_NOOPTION		3
++
+ /* register offsets from armv8.debug_base */
+ #define CPUV8_DBG_MAINID0		0xD00
+ #define CPUV8_DBG_CPUFEATURE0	0xD20
++#define CPUV8_DBG_PFR		0xD20
+ #define CPUV8_DBG_DBGFEATURE0	0xD28
+ #define CPUV8_DBG_MEMFEATURE0	0xD38
+ 
+diff --git a/src/target/armv8_dpm.c b/src/target/armv8_dpm.c
+index 9ba6b5453..f17c4aa93 100644
+--- a/src/target/armv8_dpm.c
++++ b/src/target/armv8_dpm.c
+@@ -2,6 +2,7 @@
+ 
+ /*
+  * Copyright (C) 2009 by David Brownell
++ * Copyright (C) 2019-2023, Ampere Computing LLC
+  */
+ 
+ #ifdef HAVE_CONFIG_H
+@@ -530,6 +531,220 @@ static int dpmv8_mcr(struct target *target, int cpnum,
+ 	return retval;
+ }
+ 
++/* determine highest Exception Level for this target */
++static int dpmv8_maximum_el(struct arm_dpm *dpm, enum arm_mode *highest_mode)
++{
++	int retval;
++	uint32_t edpfr_lower;
++
++	struct armv8_common *armv8 = (struct armv8_common *)dpm->arm->arch_info;
++
++	if (armv8->max_aarch64_el == ARMV8_64_EL0T) {
++		/* read EDPFR register to see what ELs exist in AARCH64 state */
++		retval = mem_ap_read_atomic_u32(armv8->debug_ap,
++				armv8->debug_base + CPUV8_DBG_PFR,
++				&edpfr_lower);
++		if (retval != ERROR_OK)
++			return retval;
++		if ((edpfr_lower >> 12) & 0xf)	/* aarch64 EL3 present */
++			*highest_mode = ARMV8_64_EL3H;
++		else if ((edpfr_lower >> 8) & 0xf)	/* EL2 present bits */
++			*highest_mode = ARMV8_64_EL2H;
++		else
++			*highest_mode = ARMV8_64_EL1H;
++
++		armv8->max_aarch64_el = *highest_mode;
++	} else {
++		*highest_mode = armv8->max_aarch64_el;
++	}
++
++	return ERROR_OK;
++}
++
++/*
++ * System register support
++ */
++
++/* Read system register */
++static int dpmv8_mrs(struct target *target, uint32_t ns_requested, uint32_t op0,
++	uint32_t op1, uint32_t op2, uint32_t crn, uint32_t crm,
++	uint64_t *value)
++{
++	struct arm *arm = target_to_arm(target);
++	struct arm_dpm *dpm = arm->dpm;
++	int retval;
++	enum arm_mode highest_mode;
++	uint32_t target_el, highest_el;
++	uint64_t scr_value;
++	bool restore_scr;
++
++	target_el = 0;
++	highest_el = target_el; /* set default to run with current exception level */
++	restore_scr = false;    /* indicate the scr does not need to be restored */
++
++	LOG_DEBUG("MRS %d, %d, x0, c%d, c%d, %d", (int)op0,
++		(int)op1, (int)crn,
++		(int)crm, (int)op2);
++
++	retval = dpm->prepare(dpm);
++	if (retval != ERROR_OK)
++		return retval;
++
++	if (ns_requested != MSRMRS_ASIS) {
++		/* user wants to execute the command at the highest exception level */
++		retval = dpmv8_maximum_el(dpm, &highest_mode);
++		if (retval != ERROR_OK) {
++			LOG_ERROR("Unable to determine highest EL level to use on MSR operation");
++			goto fail;
++		}
++
++		target_el = ((buf_get_u32(dpm->arm->cpsr->value, 0, 32) >> 2) & 3); /* current el */
++		highest_el = ((uint32_t)highest_mode) >> 2;
++		if (target_el < highest_el) {
++			retval = armv8_dpm_modeswitch(dpm, highest_mode); /* all accesses at highest EL */
++			if (retval != ERROR_OK) {
++				LOG_ERROR("Unable to switch to highest exception level on MSR operation");
++				highest_el = target_el; /* no need to try to restore exception level */
++				goto fail;
++			}
++		}
++		if (ns_requested != MSRMRS_NOOPTION) { /* user specified a specific security setting */
++			if (ns_requested == MSRMRS_SECURE && highest_mode != ARMV8_64_EL3H) {
++				LOG_ERROR("MSR %d, %d, x0, c%d, c%d, %d secure does not exist",
++					(int)op0, (int)op1, (int)crn,
++					(int)crm, (int)op2);
++				goto fail; /* may need to restore target_el */
++			} else if (highest_mode == ARMV8_64_EL3H) {
++				/* Need to see if EL3's NS bit is set correctly */
++				/* by reading SCR_EL3 */
++				retval = dpm->instr_read_data_r0_64(dpm,
++					ARMV8_MRS_INSTR(3, 6, 0, 1, 1, 0),
++					&scr_value);
++				if (retval != ERROR_OK)
++					goto fail;
++				if (ns_requested != (scr_value & 0x1)) {
++					retval = dpm->instr_write_data_r0_64(dpm,
++						ARMV8_MSR_INSTR(3, 6, 0, 1, 1, 0),
++						((scr_value & 0xFFFFFFFFFFFFFFFE) | ns_requested));
++					if (retval != ERROR_OK)
++						goto fail;
++					else
++						restore_scr = true;
++				}
++			}
++		}
++	}
++
++	/* read system register into x0; return via DCC */
++	retval = dpm->instr_read_data_r0_64(dpm,
++			ARMV8_MRS_INSTR(op0, op1, 0, crn, crm, op2), value);
++
++fail:
++	if (restore_scr) {
++		/* need to restore scr_el3.ns before leaving */
++		retval += dpm->instr_write_data_r0_64(dpm,
++			ARMV8_MSR_INSTR(3, 6, 0, 1, 1, 0),
++			scr_value);
++	}
++	if (target_el < highest_el) {
++		/* need to restore exception level */
++		retval += armv8_dpm_modeswitch(dpm, ARM_MODE_ANY); /* return to previous access */
++	}
++
++	dpm->finish(dpm);
++	return retval;
++}
++
++/* Write system register */
++static int dpmv8_msr(struct target *target, uint32_t ns_requested, uint32_t op0,
++	uint32_t op1, uint32_t op2, uint32_t crn, uint32_t crm,
++	uint64_t value)
++{
++	struct arm *arm = target_to_arm(target);
++	struct arm_dpm *dpm = arm->dpm;
++	int retval;
++	enum arm_mode highest_mode;
++	uint32_t target_el, highest_el;
++	uint64_t scr_value;
++	bool restore_scr;
++
++	target_el = 0;
++	highest_el = target_el; /* set default not to restore exception level */
++	restore_scr = false;    /* indicate the scr does not need to be restored */
++
++	LOG_DEBUG("MSR %d, %d, x0, c%d, c%d, %d", (int)op0,
++		(int)op1, (int)crn,
++		(int)crm, (int)op2);
++
++	retval = dpm->prepare(dpm);
++	if (retval != ERROR_OK)
++		return retval;
++
++	if (ns_requested != MSRMRS_ASIS) {
++		/* user wants to execute the command at the highest exception level */
++		retval = dpmv8_maximum_el(dpm, &highest_mode);
++		if (retval != ERROR_OK) {
++			LOG_ERROR("Unable to determine highest EL level to use on MSR operation");
++			goto fail;
++		}
++
++		target_el = ((buf_get_u32(dpm->arm->cpsr->value, 0, 32) >> 2) & 3); /* current el */
++		highest_el = ((uint32_t)highest_mode) >> 2;
++		if (target_el < highest_el) {
++			retval = armv8_dpm_modeswitch(dpm, highest_mode); /* all accesses at highest EL */
++			if (retval != ERROR_OK) {
++				LOG_ERROR("Unable to switch to highest exception level on MSR operation");
++				highest_el = target_el; /* no need to try to restore exception level */
++				goto fail;
++			}
++		}
++		if (ns_requested != MSRMRS_NOOPTION) { /* user specified a specific security setting */
++			if (ns_requested == MSRMRS_SECURE && highest_mode != ARMV8_64_EL3H) {
++				LOG_ERROR("MSR %d, %d, x0, c%d, c%d, %d secure does not exist",
++					(int)op0, (int)op1, (int)crn,
++					(int)crm, (int)op2);
++				goto fail; /* may need to restore target_el */
++			} else if (highest_mode == ARMV8_64_EL3H) {
++				/* Need to see if EL3's NS bit is set correctly */
++				/* by reading SCR_EL3 */
++				retval = dpm->instr_read_data_r0_64(dpm,
++					ARMV8_MRS_INSTR(3, 6, 0, 1, 1, 0),
++					&scr_value);
++				if (retval != ERROR_OK)
++					goto fail;
++				if (ns_requested != (scr_value & 0x1)) {
++					retval = dpm->instr_write_data_r0_64(dpm,
++						ARMV8_MSR_INSTR(3, 6, 0, 1, 1, 0),
++						((scr_value & 0xFFFFFFFFFFFFFFFE) | ns_requested));
++					if (retval != ERROR_OK)
++						goto fail;
++					else
++						restore_scr = true;
++				}
++			}
++		}
++	}
++
++	/* read DCC into x0; then write system register from R0 */
++	retval = dpm->instr_write_data_r0_64(dpm,
++			ARMV8_MSR_INSTR(op0, op1, 0, crn, crm, op2), value);
++
++fail:
++	if (restore_scr) {
++		/* need to restore scr_el3.ns before leaving */
++		retval += dpm->instr_write_data_r0_64(dpm,
++			ARMV8_MSR_INSTR(3, 6, 0, 1, 1, 0),
++			scr_value);
++	}
++	if (target_el < highest_el) {
++		/* need to restore exception level */
++		retval += armv8_dpm_modeswitch(dpm, ARM_MODE_ANY); /* return to previous access */
++	}
++
++	dpm->finish(dpm);
++	return retval;
++}
++
+ /*----------------------------------------------------------------------*/
+ 
+ /*
+@@ -1414,6 +1629,10 @@ int armv8_dpm_setup(struct arm_dpm *dpm)
+ 	arm->mrc = dpmv8_mrc;
+ 	arm->mcr = dpmv8_mcr;
+ 
++	/* system register setup */
++	arm->mrs = dpmv8_mrs;
++	arm->msr = dpmv8_msr;
++
+ 	dpm->prepare = dpmv8_dpm_prepare;
+ 	dpm->finish = dpmv8_dpm_finish;
+ 
+diff --git a/src/target/armv8_opcodes.h b/src/target/armv8_opcodes.h
+index 8c9652bfe..ff33e62f0 100644
+--- a/src/target/armv8_opcodes.h
++++ b/src/target/armv8_opcodes.h
+@@ -2,6 +2,7 @@
+ 
+ /*
+  * Copyright (C) 2015 by pierrr kuo <vichy.kuo@gmail.com>
++ * Copyright (C) 2019-2020, Ampere Computing LLC
+  */
+ 
+ #ifndef OPENOCD_TARGET_ARMV8_OPCODES_H
+@@ -129,10 +130,33 @@
+ #define ARMV8_ISB				0xd5033fdf
+ #define ARMV8_ISB_SY_T1				0xf3bf8f6f
+ 
+-#define ARMV8_MRS(system, rt)	(0xd5300000 | ((system) << 5) | (rt))
++/* Move to ARM register from system register
++ * op0: first system register opcode
++ * op1: second system register opcode
++ * CRn: first system register operand
++ * CRm: second system register operand
++ * op2: third system register opcode
++ * Rd: destination register
++ */
++#define ARMV8_MRS_INSTR(op0, op1, rd, crn, crm, op2) \
++	(0xd5300000 | (rd) | ((op2) << 5) | ((crm) << 8) \
++	| ((crn) << 12) | ((op1) << 16) | ((op0) << 19))
++
++/* Move to system register from ARM register
++ * op0: first system register opcode
++ * op1: second system register opcode
++ * CRn: first system register operand
++ * CRm: second system register operand
++ * op2: third system register opcode
++ * Rd: destination register
++ */
++#define ARMV8_MSR_INSTR(op0, op1, rd, crn, crm, op2) \
++	(0xd5100000 | (rd) | ((op2) << 5) | ((crm) << 8) \
++	| ((crn) << 12) | ((op1) << 16) | ((op0) << 19))
++
++#define ARMV8_MRS(system, rt) ARMV8_MRS_INSTR(0, 0, rt, 0, 0, system)
+ /* ARM V8 Move to system register. */
+-#define ARMV8_MSR_GP(system, rt) \
+-	(0xd5100000 | ((system) << 5) | (rt))
++#define ARMV8_MSR_GP(system, rt) ARMV8_MSR_INSTR(0, 0, rt, 0, 0, system)
+ /* ARM V8 Move immediate to process state field. */
+ #define ARMV8_MSR_IM(op1, crm, op2) \
+ 	(0xd500401f | ((op1) << 16)  | ((crm) << 8) | ((op2) << 5))
+-- 
+2.25.1
+
