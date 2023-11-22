@@ -25,16 +25,6 @@
 
 #define JTAG_INSTANCE 0
 
-/**
- * Note: When calculating the 8-bit aligned address below for the maximum
- * JTAG transfer data bit length, the JTAG_MAX_XFER_DATA_LEN define is
- * adjusted by one bit to account for a code bug in the open-source Linux
- * JTAG driver. Due to the driver bug, transfers of exact size
- * JTAG_MAX_XFER_DATA_LEN bits will fail.
- */
-#define JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED (((JTAG_MAX_XFER_DATA_LEN) - 1) & (~0x7))
-#define JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED_DIV8 ((JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED) >> 3)
-
 int jtag_instance = JTAG_INSTANCE;
 int jtag_hw_accel = 1;
 int jtag_fd;
@@ -254,34 +244,20 @@ static int jtag_driver_execute_scan(struct scan_command *scan)
 		xfer_copy.direction = JTAG_READ_WRITE_XFER;
 	}
 
-	while (num_bits > 0) {
+	if (num_bits > 0) {
 		xfer.type = xfer_copy.type;
 		xfer.direction = xfer_copy.direction;
 		xfer.tdio = (__u64)(uintptr_t)data_buf_chunk;
-		if (num_bits > JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED) {
-			xfer.length = (__u32)JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED;
-			if (scan->ir_scan)
-				xfer.endstate = state_conversion(TAP_IRPAUSE);
-			else
-				xfer.endstate = state_conversion(TAP_DRPAUSE);
-		} else {
-			xfer.length = (__u32)num_bits;
-			xfer.endstate = state_conversion(scan->end_state);
-		}
+
+		xfer.length = (__u32)num_bits;
+		xfer.endstate = state_conversion(scan->end_state);
 
 		ret_errno = ioctl(jtag_fd, JTAG_IOCXFER, &xfer);
 		if (ret_errno < 0) {
 			LOG_ERROR("JTAG DRIVER ERROR: unable to scan");
 			ret = ERROR_FAIL;
 		} else {
-			if (num_bits > JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED) {
-				if (scan->ir_scan)
-					end_state = TAP_IRPAUSE;
-				else
-					end_state = TAP_DRPAUSE;
-			} else {
-				end_state = scan->end_state;
-			}
+			end_state = scan->end_state;
 			tap_set_state(end_state);
 
 			if (type != SCAN_OUT)
@@ -291,12 +267,6 @@ static int jtag_driver_execute_scan(struct scan_command *scan)
 				(scan->ir_scan) ? "IR" : "DR", num_bits,
 				tap_state_name(end_state));
 		}
-
-		if (ret != ERROR_OK)
-			break;
-
-		num_bits -= MIN(num_bits, JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED);
-		data_buf_chunk += JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED_DIV8;
 	}
 
 	free(data_buf_start);
