@@ -25,16 +25,6 @@
 
 #define JTAG_INSTANCE 0
 
-/**
- * Note: When calculating the 8-bit aligned address below for the maximum
- * JTAG transfer data bit length, the JTAG_MAX_XFER_DATA_LEN define is
- * adjusted by one bit to account for a code bug in the open-source Linux
- * JTAG driver. Due to the driver bug, transfers of exact size
- * JTAG_MAX_XFER_DATA_LEN bits will fail.
- */
-#define JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED (((JTAG_MAX_XFER_DATA_LEN) - 1) & (~0x7))
-#define JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED_DIV8 ((JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED) >> 3)
-
 int jtag_instance = JTAG_INSTANCE;
 int jtag_hw_accel;
 int jtag_fd;
@@ -240,26 +230,25 @@ static int jtag_driver_execute_scan(struct scan_command *scan)
 	enum scan_type type;
 	enum tap_state end_state;
 	struct jtag_xfer xfer;
-	uint8_t *data_buf_start;
-	uint8_t *data_buf_chunk;
+	uint8_t *data_buf;
 	int num_bits;
 	int ret_errno;
 	int ret = ERROR_OK;
 
 	type = jtag_scan_type(scan);
+	end_state = scan->end_state;
 
 	LOG_DEBUG_IO("JTAG DRIVER DEBUG: scan %s, type:%d, end in %s",
-		scan->ir_scan ? "IRSCAN" : "DRSCAN", type, tap_state_name(scan->end_state));
+		scan->ir_scan ? "IRSCAN" : "DRSCAN", type, tap_state_name(end_state));
 
-	num_bits = jtag_build_buffer(scan, &data_buf_start);
-	if (!data_buf_start) {
-		LOG_ERROR("jtag_build_buffer call failed, data_buf_start == NULL, "
+	num_bits = jtag_build_buffer(scan, &data_buf);
+	if (!data_buf) {
+		LOG_ERROR("jtag_build_buffer call failed, data_buf == NULL, "
 			"file %s, line %d", __FILE__, __LINE__);
 		return ERROR_FAIL;
 	}
-	data_buf_chunk = data_buf_start;
 
-	while (num_bits > 0) {
+	if (num_bits > 0) {
 		if (scan->ir_scan)
 			xfer.type = JTAG_SIR_XFER;
 		else
@@ -275,19 +264,12 @@ static int jtag_driver_execute_scan(struct scan_command *scan)
 			/* Full-duplex scan */
 			xfer.direction = JTAG_READ_WRITE_XFER;
 		}
+
 		xfer.from = state_conversion(tap_get_state());
+		xfer.endstate = state_conversion(end_state);
 		xfer.padding = 0;
-		if (num_bits > JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED) {
-			xfer.length = (__u32)JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED;
-			if (scan->ir_scan)
-				xfer.endstate = state_conversion(TAP_IRPAUSE);
-			else
-				xfer.endstate = state_conversion(TAP_DRPAUSE);
-		} else {
-			xfer.length = (__u32)num_bits;
-			xfer.endstate = state_conversion(scan->end_state);
-		}
-		xfer.tdio = (__u64)(uintptr_t)data_buf_chunk;
+		xfer.length = (__u32)num_bits;
+		xfer.tdio = (__u64)(uintptr_t)data_buf;
 
 		ret_errno = ioctl(jtag_fd, JTAG_IOCXFER, &xfer);
 		if (ret_errno < 0) {
@@ -295,32 +277,17 @@ static int jtag_driver_execute_scan(struct scan_command *scan)
 			LOG_ERROR("JTAG DRIVER ERROR: unable to scan");
 			ret = ERROR_FAIL;
 		} else {
-			if (num_bits > JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED) {
-				if (scan->ir_scan)
-					end_state = TAP_IRPAUSE;
-				else
-					end_state = TAP_DRPAUSE;
-			} else {
-				end_state = scan->end_state;
-			}
 			tap_set_state(end_state);
 
 			if (type != SCAN_OUT)
-				ret = jtag_read_buffer(data_buf_chunk, scan);
+				ret = jtag_read_buffer(data_buf, scan);
 		}
-
-		if (ret != ERROR_OK)
-			break;
-
-		num_bits -= MIN(num_bits, JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED);
-		data_buf_chunk += JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED_DIV8;
-	}
-	if (tap_get_state() != scan->end_state && move_to_state(scan->end_state) != ERROR_OK) {
+	} else if (tap_get_state() != end_state && move_to_state(end_state) != ERROR_OK) {
 		LOG_ERROR("JTAG DRIVER ERROR: Fail in %s", __func__);
 		ret = ERROR_FAIL;
 	}
 
-	free(data_buf_start);
+	free(data_buf);
 
 	return ret;
 }
