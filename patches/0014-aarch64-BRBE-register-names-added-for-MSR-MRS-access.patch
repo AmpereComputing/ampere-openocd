@@ -1,0 +1,137 @@
+From ea9a9a6cafa0717b678bff839011460afdd56fd4 Mon Sep 17 00:00:00 2001
+From: Kevin Burke <kevinb@os.amperecomputing.com>
+Date: Tue, 13 Jun 2023 11:35:02 -0600
+Subject: [PATCH 14/33] aarch64: BRBE register names added for MSR/MRS access
+
+Added BRB* named registers for Branch Record Buffer support.
+Ordered register names alphabetically for easier read.
+
+Change-Id: I0d360f95e0f542a323eb070cfa1acaaea863362a
+Signed-off-by: Kevin Burke <kevinb@os.amperecomputing.com>
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ tcl/cpu/arm/armv8_sr.tcl | 86 +++++++++++++++++++++++-----------------
+ 1 file changed, 49 insertions(+), 37 deletions(-)
+
+diff --git a/tcl/cpu/arm/armv8_sr.tcl b/tcl/cpu/arm/armv8_sr.tcl
+index 36de7c1a7..ec5239266 100644
+--- a/tcl/cpu/arm/armv8_sr.tcl
++++ b/tcl/cpu/arm/armv8_sr.tcl
+@@ -2,7 +2,7 @@
+ #
+ # ARMv8 Architected System Register support
+ #
+-# Copyright (c) 2020-2023, Ampere Computing LLC
++# Copyright (c) 2020-2024, Ampere Computing LLC
+ #
+ 
+ # Command Usage
+@@ -30,57 +30,69 @@ proc get_sr_encoding {sys_reg_name} {
+ 	set sys_reg_name [string toupper $sys_reg_name]
+ 
+ 	switch $sys_reg_name {
+-		SCTLR_EL3 {set sr_encoding {3 6 1 0 0}}
+-		SCR_EL3 {set sr_encoding {3 6 1 1 0}}
+-		CPTR_EL3 {set sr_encoding {3 6 1 1 2}}
+-		SP_EL2 {set sr_encoding {3 6 4 1 0}}
+-		VBAR_EL3 {set sr_encoding {3 6 12 0 0}}
+-		ICC_CTLR_EL3 {set sr_encoding {3 6 12 12 4}}
+-		ICC_SRE_EL3 {set sr_encoding {3 6 12 12 5}}
+-		ICC_IGRPEN1_EL3 {set sr_encoding {3 6 12 12 7}}
+-		MPIDR_EL1 {set sr_encoding {3 0 0 0 5}}
+-		SCTLR_EL1 {set sr_encoding {3 0 1 0 0}}
++		BRBCR_EL1 {set sr_encoding {2 1 9 0 0}}
++		BRBCR_EL2 {set sr_encoding {2 4 9 0 0}}
++		BRBFCR_EL1 {set sr_encoding {2 1 9 0 1}}
++		BRBIDR0_EL1 {set sr_encoding {2 1 9 2 0}}
++		BRBINFn_EL1 {set sr_encoding {8 1 8 0 0}}
++		BRBSRCn_EL1 {set sr_encoding {2 1 8 0 1}}
++		BRBTGTn_EL1 {set sr_encoding {2 1 8 0 2}}
++		BRBTS_EL1 {set sr_encoding {2 1 9 0 2}}
++		BRB_IALL {set sr_encoding {1 1 7 2 4}}
++		CNTPCT_EL0 {set sr_encoding {3 3 14 0 1}}
++		CNTPS_CTL_EL1 {set sr_encoding {3 7 14 2 1}}
++		CNTPS_CVAL_EL1 {set sr_encoding {3 7 14 2 2}}
++		CNTPS_TVAL_EL1 {set sr_encoding {3 7 14 2 0}}
++		CNTP_CVAL_EL0 {set sr_encoding {3 3 14 2 2}}
++		CNTP_TVAL_EL0 {set sr_encoding {3 3 14 2 0}}
+ 		CPACR_EL1 {set sr_encoding {3 0 1 0 2}}
+-		ELR_EL1 {set sr_encoding {3 0 4 0 1}}
+-		SP_EL0 {set sr_encoding {3 0 4 1 0}}
+-		SPSEL {set sr_encoding {3 0 4 2 0}}
++		CPTR_EL2 {set sr_encoding {3 4 1 1 2}}
++		CPTR_EL3 {set sr_encoding {3 6 1 1 2}}
+ 		CURRENTEL {set sr_encoding {3 0 4 2 2}}
+-		ESR_EL1 {set sr_encoding {3 0 5 2 0}}
++		ELR_EL1 {set sr_encoding {3 0 4 0 1}}
+ 		ERRIDR_EL1 {set sr_encoding {3 0 5 3 0}}
+ 		ERRSELR_EL1 {set sr_encoding {3 0 5 3 1}}
+-		ERXFR_EL1 {set sr_encoding {3 0 5 4 0}}
+-		ERXCTLR_EL1 {set sr_encoding {3 0 5 4 1}}
+-		ERXSTATUS_EL1 {set sr_encoding {3 0 5 4 2}}
+ 		ERXADDR_EL1 {set sr_encoding {3 0 5 4 3}}
++		ERXCTLR_EL1 {set sr_encoding {3 0 5 4 1}}
++		ERXFR_EL1 {set sr_encoding {3 0 5 4 0}}
+ 		ERXMISC0_EL1 {set sr_encoding {3 0 5 5 0}}
+ 		ERXMISC1_EL1 {set sr_encoding {3 0 5 5 1}}
++		ERXPFGCDN_EL1 {set sr_encoding {3 0 5 4 6}}
++		ERXPFGCTL_EL1 {set sr_encoding {3 0 5 4 5}}
++		ERXPFGF_EL1 {set sr_encoding {3 0 5 4 4}}
++		ERXSTATUS_EL1 {set sr_encoding {3 0 5 4 2}}
++		ESR_EL1 {set sr_encoding {3 0 5 2 0}}
+ 		FAR_EL1 {set sr_encoding {3 0 6 0 0}}
+-		PAR_EL1 {set sr_encoding {3 0 7 4 0}}
+-		VBAR_EL1 {set sr_encoding {3 0 12 0 0}}
+-		ICC_IAR0_EL1 {set sr_encoding {3 0 12 8 0}}
++		HCR_EL2 {set sr_encoding {3 4 1 1 0}}
++		ICC_CTLR_EL1 {set sr_encoding {3 0 12 12 4}}
++		ICC_CTLR_EL3 {set sr_encoding {3 6 12 12 4}}
++		ICC_DIR_EL1 {set sr_encoding {3 0 12 11 1}}
+ 		ICC_EOIR0_EL1 {set sr_encoding {3 0 12 8 1}}
+ 		ICC_HPPIR0_EL1 {set sr_encoding {3 0 12 8 2}}
+-		ICC_DIR_EL1 {set sr_encoding {3 0 12 11 1}}
+-		ICC_RPR_EL1 {set sr_encoding {3 0 12 11 3}}
+ 		ICC_HPPIR1_EL1 {set sr_encoding {3 0 12 12 2}}
+-		ICC_CTLR_EL1 {set sr_encoding {3 0 12 12 4}}
+-		ICC_SRE_EL1 {set sr_encoding {3 0 12 12 5}}
++		ICC_IAR0_EL1 {set sr_encoding {3 0 12 8 0}}
++		ICC_IAR1_EL1 {set sr_encoding {3 0 12 12 0}}
+ 		ICC_IGRPEN0_EL1 {set sr_encoding {3 0 12 12 6}}
+ 		ICC_IGRPEN1_EL1 {set sr_encoding {3 0 12 12 7}}
+-		ICC_IAR1_EL1 {set sr_encoding {3 0 12 12 0}}
+-		ERXPFGF_EL1 {set sr_encoding {3 0 5 4 4}}
+-		ERXPFGCTL_EL1 {set sr_encoding {3 0 5 4 5}}
+-		ERXPFGCDN_EL1 {set sr_encoding {3 0 5 4 6}}
+-		CNTPCT_EL0 {set sr_encoding {3 3 14 0 1}}
+-		CNTP_TVAL_EL0 {set sr_encoding {3 3 14 2 0}}
+-		CNTP_CVAL_EL0 {set sr_encoding {3 3 14 2 2}}
++		ICC_IGRPEN1_EL3 {set sr_encoding {3 6 12 12 7}}
++		ICC_RPR_EL1 {set sr_encoding {3 0 12 11 3}}
++		ICC_SRE_EL1 {set sr_encoding {3 0 12 12 5}}
++		ICC_SRE_EL3 {set sr_encoding {3 6 12 12 5}}
++		ID_AA64DFR0_EL1 {set sr_encoding {3 0 0 5 0}}
++		MDCR_EL3 {set sr_encoding {3 6 1 3 1}}
++		MPIDR_EL1 {set sr_encoding {3 0 0 0 5}}
++		PAR_EL1 {set sr_encoding {3 0 7 4 0}}
++		PMCR_EL0 {set sr_encoding {3 3 9 12 0}}
++		SCR_EL3 {set sr_encoding {3 6 1 1 0}}
++		SCTLR_EL1 {set sr_encoding {3 0 1 0 0}}
+ 		SCTLR_EL2 {set sr_encoding {3 4 1 0 0}}
+-		HCR_EL2 {set sr_encoding {3 4 1 1 0}}
+-		CPTR_EL2 {set sr_encoding {3 4 1 1 2}}
++		SCTLR_EL3 {set sr_encoding {3 6 1 0 0}}
++		SPSEL {set sr_encoding {3 0 4 2 0}}
++		SP_EL0 {set sr_encoding {3 0 4 1 0}}
+ 		SP_EL1 {set sr_encoding {3 4 4 1 0}}
+-		CNTPS_TVAL_EL1 {set sr_encoding {3 7 14 2 0}}
+-		CNTPS_CTL_EL1 {set sr_encoding {3 7 14 2 1}}
+-		CNTPS_CVAL_EL1 {set sr_encoding {3 7 14 2 2}}
++		SP_EL2 {set sr_encoding {3 6 4 1 0}}
++		VBAR_EL1 {set sr_encoding {3 0 12 0 0}}
++		VBAR_EL3 {set sr_encoding {3 6 12 0 0}}
+ 		default {set sr_encoding {"Unsupported system register name"}}
+ 	}
+ 
+-- 
+2.25.1
+

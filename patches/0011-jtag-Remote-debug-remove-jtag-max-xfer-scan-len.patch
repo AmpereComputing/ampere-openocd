@@ -1,0 +1,95 @@
+From 8f4fa18164334a99e7d3ffdcdb252031a2d59bbf Mon Sep 17 00:00:00 2001
+From: Brian Esquilona <briane@os.amperecomputing.com>
+Date: Wed, 22 Nov 2023 09:41:43 -0700
+Subject: [PATCH 11/33] jtag: Remote debug remove jtag max xfer scan len
+
+Not all systems support IRPAUSE and DRPAUSE JTAG states, but are
+still capable of streaming large chains of JTAG data. By removing
+the arbitrary maximum transfer length, this fixes a problem
+transferring data that exceeds the length on systems that do not
+support IRPAUSE and DRPAUSE.
+
+Change-Id: I3cec7a8b9dee3f1e9029294d7c60baae66027de7
+Signed-off-by: Brian Esquilona <briane@os.amperecomputing.com>
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/jtag/drivers/jtag_driver.c | 40 +++++-----------------------------
+ 1 file changed, 5 insertions(+), 35 deletions(-)
+
+diff --git a/src/jtag/drivers/jtag_driver.c b/src/jtag/drivers/jtag_driver.c
+index 65ec82572..e5791fabc 100644
+--- a/src/jtag/drivers/jtag_driver.c
++++ b/src/jtag/drivers/jtag_driver.c
+@@ -25,16 +25,6 @@
+ 
+ #define JTAG_INSTANCE 0
+ 
+-/**
+- * Note: When calculating the 8-bit aligned address below for the maximum
+- * JTAG transfer data bit length, the JTAG_MAX_XFER_DATA_LEN define is
+- * adjusted by one bit to account for a code bug in the open-source Linux
+- * JTAG driver. Due to the driver bug, transfers of exact size
+- * JTAG_MAX_XFER_DATA_LEN bits will fail.
+- */
+-#define JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED (((JTAG_MAX_XFER_DATA_LEN) - 1) & (~0x7))
+-#define JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED_DIV8 ((JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED) >> 3)
+-
+ int jtag_instance = JTAG_INSTANCE;
+ int jtag_hw_accel = 1;
+ int jtag_fd;
+@@ -254,34 +244,20 @@ static int jtag_driver_execute_scan(struct scan_command *scan)
+ 		xfer_copy.direction = JTAG_READ_WRITE_XFER;
+ 	}
+ 
+-	while (num_bits > 0) {
++	if (num_bits > 0) {
+ 		xfer.type = xfer_copy.type;
+ 		xfer.direction = xfer_copy.direction;
+ 		xfer.tdio = (__u64)(uintptr_t)data_buf_chunk;
+-		if (num_bits > JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED) {
+-			xfer.length = (__u32)JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED;
+-			if (scan->ir_scan)
+-				xfer.endstate = state_conversion(TAP_IRPAUSE);
+-			else
+-				xfer.endstate = state_conversion(TAP_DRPAUSE);
+-		} else {
+-			xfer.length = (__u32)num_bits;
+-			xfer.endstate = state_conversion(scan->end_state);
+-		}
++
++		xfer.length = (__u32)num_bits;
++		xfer.endstate = state_conversion(scan->end_state);
+ 
+ 		ret_errno = ioctl(jtag_fd, JTAG_IOCXFER, &xfer);
+ 		if (ret_errno < 0) {
+ 			LOG_ERROR("JTAG DRIVER ERROR: unable to scan");
+ 			ret = ERROR_FAIL;
+ 		} else {
+-			if (num_bits > JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED) {
+-				if (scan->ir_scan)
+-					end_state = TAP_IRPAUSE;
+-				else
+-					end_state = TAP_DRPAUSE;
+-			} else {
+-				end_state = scan->end_state;
+-			}
++			end_state = scan->end_state;
+ 			tap_set_state(end_state);
+ 
+ 			if (type != SCAN_OUT)
+@@ -291,12 +267,6 @@ static int jtag_driver_execute_scan(struct scan_command *scan)
+ 				(scan->ir_scan) ? "IR" : "DR", num_bits,
+ 				tap_state_name(end_state));
+ 		}
+-
+-		if (ret != ERROR_OK)
+-			break;
+-
+-		num_bits -= MIN(num_bits, JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED);
+-		data_buf_chunk += JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED_DIV8;
+ 	}
+ 
+ 	free(data_buf_start);
+-- 
+2.25.1
+

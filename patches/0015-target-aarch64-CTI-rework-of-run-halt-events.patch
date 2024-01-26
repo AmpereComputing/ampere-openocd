@@ -1,0 +1,421 @@
+From 1891979c5070b81f9b55478dc3c08eb670b52521 Mon Sep 17 00:00:00 2001
+From: Steve Clevenger <scclevenger@os.amperecomputing.com>
+Date: Mon, 29 Nov 2021 21:53:56 +0000
+Subject: [PATCH 15/33] target/aarch64: CTI rework of run/halt events
+
+CTI rework for tighter coupling of run/halt events.
+
+Leverage ARM's CTI to propagate resume and halt trigger events.
+This approach provides tighter SMP coupling when resuming and
+halting SMP cores.
+
+Change-Id: I3025316cfd4660bea0dd0e054d43653f8f49ac89
+Signed-off-by: Steve Clevenger <scclevenger@os.amperecomputing.com>
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/target/aarch64.c | 183 ++++++++++++++++++++++++++++++++++++-------
+ src/target/aarch64.h |   7 ++
+ 2 files changed, 161 insertions(+), 29 deletions(-)
+
+diff --git a/src/target/aarch64.c b/src/target/aarch64.c
+index ceb4df70e..afbcd0b64 100644
+--- a/src/target/aarch64.c
++++ b/src/target/aarch64.c
+@@ -198,6 +198,7 @@ static int aarch64_mmu_modify(struct target *target, int enable)
+ static int aarch64_init_debug_access(struct target *target)
+ {
+ 	struct armv8_common *armv8 = target_to_armv8(target);
++	struct aarch64_common *aarch64 = target_to_aarch64(target);
+ 	int retval;
+ 	uint32_t dummy;
+ 
+@@ -219,7 +220,7 @@ static int aarch64_init_debug_access(struct target *target)
+ 
+ 	/*
+ 	 * Static CTI configuration:
+-	 * Channel 0 -> trigger outputs HALT request to PE
++	 * Channel 0 -> trigger outputs HALT request to PE (or all PEs)
+ 	 * Channel 1 -> trigger outputs Resume request to PE
+ 	 * Gate all channel trigger events from entering the CTM
+ 	 */
+@@ -229,18 +230,27 @@ static int aarch64_init_debug_access(struct target *target)
+ 	/* By default, gate all channel events to and from the CTM */
+ 	if (retval == ERROR_OK)
+ 		retval = arm_cti_write_reg(armv8->cti, CTI_GATE, 0);
++	/* For CTI extended mode, set up synchronous halt using channel 0. Each
++	 * CTI propagates a channel 0 cross-halt trigger event in extended mode.
++	 */
++	if (aarch64->cti_mode == AARCH64_CTIMODE_EXTEND) {
++		/* each CTI generates a debug request trigger in response to channel event */
++		if (retval == ERROR_OK)
++			retval = arm_cti_write_reg(armv8->cti, CTI_INEN0, CTI_CHNL(0));
++	} else {
++		if (retval == ERROR_OK)
++			retval = arm_cti_write_reg(armv8->cti, CTI_INEN0, 0);
++	}
+ 	/* output halt requests to PE on channel 0 event */
+ 	if (retval == ERROR_OK)
+ 		retval = arm_cti_write_reg(armv8->cti, CTI_OUTEN0, CTI_CHNL(0));
+ 	/* output restart requests to PE on channel 1 event */
+ 	if (retval == ERROR_OK)
+ 		retval = arm_cti_write_reg(armv8->cti, CTI_OUTEN1, CTI_CHNL(1));
+-	if (retval != ERROR_OK)
+-		return retval;
+ 
+ 	/* Resync breakpoint registers */
+ 
+-	return ERROR_OK;
++	return retval;
+ }
+ 
+ /* Write to memory mapped registers directly with no cache or mmu handling */
+@@ -377,7 +387,7 @@ static int aarch64_halt_one(struct target *target, enum halt_mode mode)
+ 	if (retval != ERROR_OK)
+ 		return retval;
+ 
+-	/* trigger an event on channel 0, this outputs a halt request to the PE */
++	/* trigger an event on channel 0, this outputs a halt request */
+ 	retval = arm_cti_pulse_channel(armv8->cti, 0);
+ 	if (retval != ERROR_OK)
+ 		return retval;
+@@ -459,13 +469,16 @@ static int aarch64_halt_smp(struct target *target, bool exc_target)
+ 
+ static int update_halt_gdb(struct target *target, enum target_debug_reason debug_reason)
+ {
++	struct aarch64_common *aarch64 = target_to_aarch64(target);
+ 	struct target *gdb_target = NULL;
+ 	struct target_list *head;
+ 	struct target *curr;
+ 
+-	if (debug_reason == DBG_REASON_NOTHALTED) {
+-		LOG_DEBUG("Halting remaining targets in SMP group");
+-		aarch64_halt_smp(target, true);
++	if (aarch64->cti_mode == AARCH64_CTIMODE_LEGACY) {
++		if (debug_reason == DBG_REASON_NOTHALTED) {
++			LOG_DEBUG("Halting remaining targets in SMP group");
++			aarch64_halt_smp(target, true);
++		}
+ 	}
+ 
+ 	/* poll all targets in the group, but skip the target that serves GDB */
+@@ -517,6 +530,7 @@ static int aarch64_poll(struct target *target)
+ 	if (halted) {
+ 		prev_target_state = target->state;
+ 		if (prev_target_state != TARGET_HALTED) {
++			struct aarch64_common *aarch64 = target_to_aarch64(target);
+ 			enum target_debug_reason debug_reason = target->debug_reason;
+ 
+ 			/* We have a halting debug event */
+@@ -532,6 +546,17 @@ static int aarch64_poll(struct target *target)
+ 			if (arm_semihosting(target, &retval) != 0)
+ 				return retval;
+ 
++			/* The verbose_halt_msg setting is tied to LOG_LVL here. OpenOCD
++			 * attempts to suppress (what it considers) redundant messages
++			 * related to GDB run/halt events. The unfortunate end result is
++			 * misleading log messages.
++			 */
++			bool verbose_halt_msg = target->verbose_halt_msg;
++
++			if (aarch64->cti_mode == AARCH64_CTIMODE_EXTEND &&
++				debug_level >= LOG_LVL_INFO)
++				target->verbose_halt_msg = true;
++
+ 			switch (prev_target_state) {
+ 			case TARGET_RUNNING:
+ 			case TARGET_UNKNOWN:
+@@ -544,6 +569,9 @@ static int aarch64_poll(struct target *target)
+ 			default:
+ 				break;
+ 			}
++			if (aarch64->cti_mode == AARCH64_CTIMODE_EXTEND &&
++				debug_level >= LOG_LVL_INFO)
++				target->verbose_halt_msg = verbose_halt_msg;
+ 		}
+ 	} else
+ 		target->state = TARGET_RUNNING;
+@@ -624,6 +652,7 @@ static int aarch64_restore_one(struct target *target, int current,
+  */
+ static int aarch64_prepare_restart_one(struct target *target)
+ {
++	struct aarch64_common *aarch64 = target_to_aarch64(target);
+ 	struct armv8_common *armv8 = target_to_armv8(target);
+ 	int retval;
+ 	uint32_t dscr;
+@@ -650,8 +679,14 @@ static int aarch64_prepare_restart_one(struct target *target)
+ 	 */
+ 	if (retval == ERROR_OK)
+ 		retval = arm_cti_ungate_channel(armv8->cti, 1);
+-	if (retval == ERROR_OK)
+-		retval = arm_cti_gate_channel(armv8->cti, 0);
++	if (aarch64->cti_mode == AARCH64_CTIMODE_EXTEND) {
++		/* Open the CTI gate for channel 0 to propagate halt events to all PEs. */
++		if (retval == ERROR_OK)
++			retval = arm_cti_ungate_channel(armv8->cti, 0);
++	} else {
++		if (retval == ERROR_OK)
++			retval = arm_cti_gate_channel(armv8->cti, 0);
++	}
+ 
+ 	/* make sure that DSCR.HDE is set */
+ 	if (retval == ERROR_OK) {
+@@ -768,6 +803,7 @@ static int aarch64_prep_restart_smp(struct target *target, int handle_breakpoint
+ static int aarch64_step_restart_smp(struct target *target)
+ {
+ 	int retval = ERROR_OK;
++	struct aarch64_common *aarch64 = target_to_aarch64(target);
+ 	struct target_list *head;
+ 	struct target *first = NULL;
+ 
+@@ -776,12 +812,17 @@ static int aarch64_step_restart_smp(struct target *target)
+ 	retval = aarch64_prep_restart_smp(target, 0, &first);
+ 	if (retval != ERROR_OK)
+ 		return retval;
+-
+-	if (first)
+-		retval = aarch64_do_restart_one(first, RESTART_LAZY);
+-	if (retval != ERROR_OK) {
+-		LOG_DEBUG("error restarting target %s", target_name(first));
+-		return retval;
++	if (aarch64->cti_mode == AARCH64_CTIMODE_LEGACY) {
++		/*
++		 * CTI legacy mode restarts SMP cores here, but it's faked
++		 * in extended mode.
++		 */
++		if (first)
++			retval = aarch64_do_restart_one(first, RESTART_LAZY);
++		if (retval != ERROR_OK) {
++			LOG_DEBUG("error restarting target %s", target_name(first));
++			return retval;
++		}
+ 	}
+ 
+ 	int64_t then = timeval_ms();
+@@ -801,13 +842,16 @@ static int aarch64_step_restart_smp(struct target *target)
+ 			if (!target_was_examined(curr))
+ 				continue;
+ 
+-			retval = aarch64_check_state_one(curr,
+-					PRSR_SDR, PRSR_SDR, &resumed, &prsr);
+-			if (retval != ERROR_OK || (!resumed && (prsr & PRSR_HALT))) {
+-				all_resumed = false;
+-				break;
++			if (aarch64->cti_mode == AARCH64_CTIMODE_LEGACY) {
++				retval = aarch64_check_state_one(curr,
++						PRSR_SDR, PRSR_SDR, &resumed, &prsr);
++				if (retval != ERROR_OK || (!resumed && (prsr & PRSR_HALT))) {
++					all_resumed = false;
++					break;
++				}
+ 			}
+ 
++			/* Only fake a restart for CTI extended mode */
+ 			if (curr->state != TARGET_RUNNING) {
+ 				curr->state = TARGET_RUNNING;
+ 				curr->debug_reason = DBG_REASON_NOTHALTED;
+@@ -830,10 +874,11 @@ static int aarch64_step_restart_smp(struct target *target)
+ 		 * cluster explicitly. So if we find that a core has not halted
+ 		 * yet, we trigger an explicit resume for the second cluster.
+ 		 */
+-		retval = aarch64_do_restart_one(curr, RESTART_LAZY);
++		if (aarch64->cti_mode == AARCH64_CTIMODE_LEGACY)
++			retval = aarch64_do_restart_one(curr, RESTART_LAZY);
+ 		if (retval != ERROR_OK)
+ 			break;
+-}
++	}
+ 
+ 	return retval;
+ }
+@@ -844,6 +889,8 @@ static int aarch64_resume(struct target *target, int current,
+ 	int retval = 0;
+ 	uint64_t addr = address;
+ 
++	LOG_DEBUG("%s", target_name(target));
++
+ 	struct armv8_common *armv8 = target_to_armv8(target);
+ 	armv8->last_run_control_op = ARMV8_RUNCONTROL_RESUME;
+ 
+@@ -957,6 +1004,11 @@ static int aarch64_debug_entry(struct target *target)
+ 	if (retval == ERROR_OK)
+ 		retval = mem_ap_read_atomic_u32(armv8->debug_ap,
+ 				armv8->debug_base + CPUV8_DBG_DSCR, &dscr);
++
++	/* close the CTI gate for all events */
++	if (retval == ERROR_OK)
++		retval = arm_cti_write_reg(armv8->cti, CTI_GATE, 0);
++
+ 	if (retval == ERROR_OK)
+ 		retval = arm_cti_ack_events(armv8->cti, CTI_TRIG(HALT));
+ 
+@@ -970,9 +1022,6 @@ static int aarch64_debug_entry(struct target *target)
+ 	armv8_select_opcodes(armv8, core_state == ARM_STATE_AARCH64);
+ 	armv8_select_reg_access(armv8, core_state == ARM_STATE_AARCH64);
+ 
+-	/* close the CTI gate for all events */
+-	if (retval == ERROR_OK)
+-		retval = arm_cti_write_reg(armv8->cti, CTI_GATE, 0);
+ 	/* discard async exceptions */
+ 	if (retval == ERROR_OK)
+ 		retval = dpm->instr_cpsr_sync(dpm);
+@@ -1097,6 +1146,8 @@ static int aarch64_step(struct target *target, int current, target_addr_t addres
+ 	int retval;
+ 	uint32_t edecr;
+ 
++	LOG_DEBUG("%s", target_name(target));
++
+ 	armv8->last_run_control_op = ARMV8_RUNCONTROL_STEP;
+ 
+ 	if (target->state != TARGET_HALTED) {
+@@ -1132,11 +1183,26 @@ static int aarch64_step(struct target *target, int current, target_addr_t addres
+ 			}
+ 		} else {
+ 			/*
+-			 * isolate current target so that it doesn't get resumed
+-			 * together with the others
++			 * Isolate current target so that it doesn't get resumed
++			 * with the other SMP cores.
+ 			 */
+ 			retval = arm_cti_gate_channel(armv8->cti, 1);
+-			/* resume all other targets in the group */
++			if (aarch64->cti_mode == AARCH64_CTIMODE_EXTEND) {
++				if (retval == ERROR_OK)
++					retval = arm_cti_gate_channel(armv8->cti, 0);
++				if (retval == ERROR_OK)
++					retval = arm_cti_ack_events(armv8->cti, CTI_TRIG(HALT));
++				if (retval != ERROR_OK) {
++					LOG_ERROR("Failed to gate stepping target CTI");
++					return retval;
++				}
++			}
++			/* For CTI legacy mode, aarch64_step_restart_smp restarts
++			 * the other SMP cores prior to stepping the current core.
++			 * CTI extended mode only fakes like this happened. To
++			 * ensure tighter SMP coupling, the non-stepped SMP cores
++			 * are CTI signaled to restart when the current core steps.
++			 */
+ 			if (retval == ERROR_OK)
+ 				retval = aarch64_step_restart_smp(target);
+ 			if (retval != ERROR_OK) {
+@@ -1248,6 +1314,8 @@ static int aarch64_set_breakpoint(struct target *target,
+ 	struct armv8_common *armv8 = &aarch64->armv8_common;
+ 	struct aarch64_brp *brp_list = aarch64->brp_list;
+ 
++	LOG_DEBUG("%s", target_name(target));
++
+ 	if (breakpoint->is_set) {
+ 		LOG_WARNING("breakpoint already set");
+ 		return ERROR_OK;
+@@ -1502,6 +1570,8 @@ static int aarch64_unset_breakpoint(struct target *target, struct breakpoint *br
+ 	struct armv8_common *armv8 = &aarch64->armv8_common;
+ 	struct aarch64_brp *brp_list = aarch64->brp_list;
+ 
++	LOG_DEBUG("%s", target_name(target));
++
+ 	if (!breakpoint->is_set) {
+ 		LOG_WARNING("breakpoint not set");
+ 		return ERROR_OK;
+@@ -2789,6 +2859,7 @@ static int aarch64_init_arch_info(struct target *target,
+ 
+ 	/* Setup struct aarch64_common */
+ 	aarch64->common_magic = AARCH64_COMMON_MAGIC;
++	aarch64->cti_mode = AARCH64_CTIMODE_LEGACY;	/* default to legacy */
+ 	aarch64->isrmasking_mode = AARCH64_ISRMASK_ON;
+ 	aarch64->step_only_mode = AARCH64_STEPONLY_OFF; /* resume smp cpus while stepping single cpu */
+ 	armv8->arm.dap = dap;
+@@ -3089,6 +3160,53 @@ COMMAND_HANDLER(aarch64_step_only_command)
+ 	return ERROR_OK;
+ }
+ 
++COMMAND_HANDLER(aarch64_cti_mode)
++{
++	struct target *target = get_current_target(CMD_CTX);
++	struct target_list *head;
++	struct aarch64_common *aarch64 = target_to_aarch64(target);
++	struct armv8_common *armv8 = NULL;
++
++	static const struct jim_nvp nvp_cti_mode[] = {
++		{ .name = "legacy", .value = AARCH64_CTIMODE_LEGACY },
++		{ .name = "extend", .value = AARCH64_CTIMODE_EXTEND },
++		{ .name = NULL, .value = -1 },
++	};
++	const struct jim_nvp *n;
++
++	if (CMD_ARGC > 0) {
++		int retval = ERROR_OK;
++		n = jim_nvp_name2value_simple(nvp_cti_mode, CMD_ARGV[0]);
++		if (!n->name) {
++			LOG_ERROR("Unknown parameter: %s - should be legacy or extend", CMD_ARGV[0]);
++			return ERROR_COMMAND_SYNTAX_ERROR;
++		}
++		foreach_smp_target(head, target->smp_targets) {
++			aarch64 = target_to_aarch64(head->target);
++			armv8 = target_to_armv8(head->target);
++
++			aarch64->cti_mode = n->value;
++			retval = arm_cti_enable(armv8->cti, false);
++
++			if (retval == ERROR_OK)
++				retval = aarch64_init_debug_access(head->target);
++
++			if (retval == ERROR_OK)
++				retval = aarch64_poll(head->target);
++
++			if (retval != ERROR_OK) {
++				LOG_ERROR("%s: debug access failure", __func__);
++				return retval;
++			}
++		}
++	}
++
++	n = jim_nvp_value2name_simple(nvp_cti_mode, aarch64->cti_mode);
++	command_print(CMD, "aarch64 cti mode %s", n->name);
++
++	return ERROR_OK;
++}
++
+ COMMAND_HANDLER(aarch64_mcrmrc_command)
+ {
+ 	bool is_mcr = false;
+@@ -3336,6 +3454,13 @@ static const struct command_registration aarch64_exec_command_handlers[] = {
+ 		.help = "display information about target caches",
+ 		.usage = "",
+ 	},
++	{
++		.name = "cti",
++		.handler = aarch64_cti_mode,
++		.mode = COMMAND_ANY,
++		.help = "tighter coupling of smp core run/halt events",
++		.usage = "['legacy'|'extend']",
++	},
+ 	{
+ 		.name = "dbginit",
+ 		.handler = aarch64_handle_dbginit_command,
+diff --git a/src/target/aarch64.h b/src/target/aarch64.h
+index 17e5f9cec..e34197e59 100644
+--- a/src/target/aarch64.h
++++ b/src/target/aarch64.h
+@@ -35,6 +35,11 @@ enum aarch64_steponly_mode {
+ 	AARCH64_STEPONLY_ON,
+ };
+ 
++enum aarch64_cti_mode {
++	AARCH64_CTIMODE_LEGACY,
++	AARCH64_CTIMODE_EXTEND
++};
++
+ struct aarch64_brp {
+ 	int used;
+ 	int type;
+@@ -66,6 +71,8 @@ struct aarch64_common {
+ 	enum aarch64_isrmasking_mode isrmasking_mode;
+ 
+ 	enum aarch64_steponly_mode step_only_mode;
++
++	enum aarch64_cti_mode cti_mode;
+ };
+ 
+ static inline struct aarch64_common *
+-- 
+2.25.1
+

@@ -1,0 +1,81 @@
+From 9194dd7d0b5b7cc842d273bee5d922ca55bdfffe Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Thu, 25 Apr 2019 11:38:04 -0400
+Subject: [PATCH 03/33] gdb_server: remove 'fake_thread' workaround for OS
+ threads. [DO NOT UPSTREAM]
+
+The 'fake_thread' workaround resolves an issue with respect to
+GDB debugging multiple OS threads which is outside the scope
+of OpenOCD. The workaround breaks HW CPU thread support.
+Since OpenOCD only supports debugging from a CPU core
+perspective and not OS Threads, it is unnecessary to include
+this workaround. My recommendation is to remove the workaround
+since it isn't needed and breaks HW CPU thread functionality.
+
+Tested on an Ampere eMAG8180 and Quicksilver silicon.
+
+Change-Id: I7b09d56727a860fb86652bb3ff1e9c2f8cf6fb7b
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/server/gdb_server.c | 31 -------------------------------
+ 1 file changed, 31 deletions(-)
+
+diff --git a/src/server/gdb_server.c b/src/server/gdb_server.c
+index d1bcfb540..4dec48382 100644
+--- a/src/server/gdb_server.c
++++ b/src/server/gdb_server.c
+@@ -3033,7 +3033,6 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
+ 	/* single-step or step-over-breakpoint */
+ 	if (parse[0] == 's') {
+ 		gdb_running_type = 's';
+-		bool fake_step = false;
+ 
+ 		struct target *ct = target;
+ 		int current_pc = 1;
+@@ -3055,13 +3054,6 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
+ 			rtos_update_threads(target);
+ 
+ 			target->rtos->gdb_target_for_threadid(connection, thread_id, &ct);
+-
+-			/*
+-			 * check if the thread to be stepped is the current rtos thread
+-			 * if not, we must fake the step
+-			 */
+-			if (target->rtos->current_thread != thread_id)
+-				fake_step = true;
+ 		}
+ 
+ 		if (parse[0] == ';') {
+@@ -3098,29 +3090,6 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
+ 		gdb_connection->output_flag = GDB_OUTPUT_ALL;
+ 		target_call_event_callbacks(ct, TARGET_EVENT_GDB_START);
+ 
+-		/*
+-		 * work around an annoying gdb behaviour: when the current thread
+-		 * is changed in gdb, it assumes that the target can follow and also
+-		 * make the thread current. This is an assumption that cannot hold
+-		 * for a real target running a multi-threading OS. We just fake
+-		 * the step to not trigger an internal error in gdb. See
+-		 * https://sourceware.org/bugzilla/show_bug.cgi?id=22925 for details
+-		 */
+-		if (fake_step) {
+-			int sig_reply_len;
+-			char sig_reply[128];
+-
+-			LOG_DEBUG("fake step thread %"PRIx64, thread_id);
+-
+-			sig_reply_len = snprintf(sig_reply, sizeof(sig_reply),
+-									"T05thread:%016"PRIx64";", thread_id);
+-
+-			gdb_put_packet(connection, sig_reply, sig_reply_len);
+-			gdb_connection->output_flag = GDB_OUTPUT_NO;
+-
+-			return true;
+-		}
+-
+ 		/* support for gdb_sync command */
+ 		if (gdb_connection->sync) {
+ 			gdb_connection->sync = false;
+-- 
+2.25.1
+

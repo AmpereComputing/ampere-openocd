@@ -1,0 +1,49 @@
+From 494678b357375cabcc9b68af9fb03358f1734dac Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Thu, 16 Apr 2020 15:29:30 -0400
+Subject: [PATCH 22/33] N1SDP: Arm N1SDP user configs [DO NOT UPSTREAM]
+
+Add user configuration file for ARM Neoverse N1.
+Configured for the Olimex ARM-USB-OCD-H JTAG probe.
+
+https://www.olimex.com/Products/ARM/JTAG/ARM-USB-OCD-H/
+
+Tested on ARM Neoverse N1 Development Platform
+
+Change-Id: I0a39727e5c3be6c0c5df6230dcc8d5b467da5f28
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ tcl/openocd.n1sdp.cfg | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+ create mode 100644 tcl/openocd.n1sdp.cfg
+
+diff --git a/tcl/openocd.n1sdp.cfg b/tcl/openocd.n1sdp.cfg
+new file mode 100644
+index 000000000..15819d1da
+--- /dev/null
++++ b/tcl/openocd.n1sdp.cfg
+@@ -0,0 +1,21 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Example OpenOCD user configuration for ARM Neoverse N1 Development Platform
++#
++# Copyright (c) 2019-2023, Ampere Computing LLC
++#
++
++bindto 0.0.0.0
++
++#
++# Interface Configuration
++#
++
++source [find interface/ftdi/olimex-arm-usb-ocd-h.cfg]
++
++
++#
++# Board (Platform) Configuration
++#
++
++source [find board/arm_n1sdp.cfg]
+-- 
+2.25.1
+

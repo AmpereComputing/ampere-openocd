@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Copyright (c) 2020-2024, Ampere Computing LLC
+#
+
+To apply the Ampere feature patches...
+
+$ git clone https://git.code.sf.net/p/openocd/code openocd
+$ cd openocd
+$ git checkout 151b743714382120dbe0dee0e0eeb75826ef5b3a
+$ git am <path>/openocd/patches/*.patch

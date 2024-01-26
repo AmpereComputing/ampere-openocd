@@ -1,0 +1,260 @@
+From 18126351f35a360d7167ee7fd472669bc4956768 Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Mon, 5 Dec 2022 13:53:34 -0800
+Subject: [PATCH 33/33] ac03: boundary-scan user configs [DO NOT UPSTREAM]
+
+Add 1P and 2P boundary-scan user configuration files for AmpereOne
+Family chips.
+
+Change-Id: Iacd78fe64846ecbc7fff2796f47ca30d4168189b
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ tcl/openocd.ac03_1s_bmc_bs.cfg | 53 ++++++++++++++++++++++++++++++++++
+ tcl/openocd.ac03_1s_sil_bs.cfg | 53 ++++++++++++++++++++++++++++++++++
+ tcl/openocd.ac03_2s_bmc_bs.cfg | 53 ++++++++++++++++++++++++++++++++++
+ tcl/openocd.ac03_2s_sil_bs.cfg | 53 ++++++++++++++++++++++++++++++++++
+ 4 files changed, 212 insertions(+)
+ create mode 100644 tcl/openocd.ac03_1s_bmc_bs.cfg
+ create mode 100644 tcl/openocd.ac03_1s_sil_bs.cfg
+ create mode 100644 tcl/openocd.ac03_2s_bmc_bs.cfg
+ create mode 100644 tcl/openocd.ac03_2s_sil_bs.cfg
+
+diff --git a/tcl/openocd.ac03_1s_bmc_bs.cfg b/tcl/openocd.ac03_1s_bmc_bs.cfg
+new file mode 100644
+index 000000000..f3aee95eb
+--- /dev/null
++++ b/tcl/openocd.ac03_1s_bmc_bs.cfg
+@@ -0,0 +1,53 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Example OpenOCD user configuration for the AST2600 BMC
++# on the AmpereOne and AmpereOne X development platforms
++#
++# Copyright (c) 2022-2023, Ampere Computing LLC
++#
++
++# Command Line Argument Description
++#
++# JTAGFREQ
++# Override the default JTAG clock frequency
++# If not specified, defaults to "1000" kHz
++# Syntax: -c "set JTAGFREQ {1000}"
++
++# Operating System Environment Variable Overrides
++#
++# OCD_TELNET_PORT
++# Specify OpenOCD's Telnet port
++# csh:  setenv OCD_TELNET_PORT 4444
++# bash: export OCD_TELNET_PORT=4444
++#
++# OCD_TCL_PORT
++# Specify OpenOCD's TCL port
++# csh:  setenv OCD_TCL_PORT 6666
++# bash: export OCD_TCL_PORT=6666
++
++bindto 0.0.0.0
++#debug_level 3
++
++if { [info exists env(OCD_TELNET_PORT)] } {
++	telnet_port $::env(OCD_TELNET_PORT)
++}
++
++if { [info exists env(OCD_TCL_PORT)] } {
++	tcl_port $::env(OCD_TCL_PORT)
++}
++
++#
++# Interface Configuration
++#
++
++source [find interface/jtag_driver.cfg]
++
++#
++# Board (Platform) Configuration
++#
++
++if { ![info exists JTAGFREQ] } {
++	set JTAGFREQ 1000
++}
++
++source [find board/ampere_ac03_1s_bs.cfg]
+diff --git a/tcl/openocd.ac03_1s_sil_bs.cfg b/tcl/openocd.ac03_1s_sil_bs.cfg
+new file mode 100644
+index 000000000..14d65d1d0
+--- /dev/null
++++ b/tcl/openocd.ac03_1s_sil_bs.cfg
+@@ -0,0 +1,53 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Example OpenOCD user configuration for the AmpereOne
++# and AmpereOne X Development Platforms
++#
++# Copyright (c) 2022-2023, Ampere Computing LLC
++#
++
++# Command Line Argument Description
++#
++# JTAGFREQ
++# Override the default JTAG clock frequency
++# If not specified, defaults to "1000" kHz
++# Syntax: -c "set JTAGFREQ {1000}"
++
++# Operating System Environment Variable Overrides
++#
++# OCD_TELNET_PORT
++# Specify OpenOCD's Telnet port
++# csh:  setenv OCD_TELNET_PORT 4444
++# bash: export OCD_TELNET_PORT=4444
++#
++# OCD_TCL_PORT
++# Specify OpenOCD's TCL port
++# csh:  setenv OCD_TCL_PORT 6666
++# bash: export OCD_TCL_PORT=6666
++
++bindto 0.0.0.0
++#debug_level 3
++
++if { [info exists env(OCD_TELNET_PORT)] } {
++	telnet_port $::env(OCD_TELNET_PORT)
++}
++
++if { [info exists env(OCD_TCL_PORT)] } {
++	tcl_port $::env(OCD_TCL_PORT)
++}
++
++#
++# Interface Configuration
++#
++
++source [find interface/ftdi/olimex-arm-usb-ocd-h.cfg]
++
++#
++# Board (Platform) Configuration
++#
++
++if { ![info exists JTAGFREQ] } {
++	set JTAGFREQ 1000
++}
++
++source [find board/ampere_ac03_1s_bs.cfg]
+diff --git a/tcl/openocd.ac03_2s_bmc_bs.cfg b/tcl/openocd.ac03_2s_bmc_bs.cfg
+new file mode 100644
+index 000000000..6d59ee75a
+--- /dev/null
++++ b/tcl/openocd.ac03_2s_bmc_bs.cfg
+@@ -0,0 +1,53 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Example OpenOCD user configuration for the AST2600 BMC
++# on the AmpereOne and AmpereOne X development platforms
++#
++# Copyright (c) 2022-2023, Ampere Computing LLC
++#
++
++# Command Line Argument Description
++#
++# JTAGFREQ
++# Override the default JTAG clock frequency
++# If not specified, defaults to "1000" kHz
++# Syntax: -c "set JTAGFREQ {1000}"
++
++# Operating System Environment Variable Overrides
++#
++# OCD_TELNET_PORT
++# Specify OpenOCD's Telnet port
++# csh:  setenv OCD_TELNET_PORT 4444
++# bash: export OCD_TELNET_PORT=4444
++#
++# OCD_TCL_PORT
++# Specify OpenOCD's TCL port
++# csh:  setenv OCD_TCL_PORT 6666
++# bash: export OCD_TCL_PORT=6666
++
++bindto 0.0.0.0
++#debug_level 3
++
++if { [info exists env(OCD_TELNET_PORT)] } {
++	telnet_port $::env(OCD_TELNET_PORT)
++}
++
++if { [info exists env(OCD_TCL_PORT)] } {
++	tcl_port $::env(OCD_TCL_PORT)
++}
++
++#
++# Interface Configuration
++#
++
++source [find interface/jtag_driver.cfg]
++
++#
++# Board (Platform) Configuration
++#
++
++if { ![info exists JTAGFREQ] } {
++	set JTAGFREQ 1000
++}
++
++source [find board/ampere_ac03_2s_bs.cfg]
+diff --git a/tcl/openocd.ac03_2s_sil_bs.cfg b/tcl/openocd.ac03_2s_sil_bs.cfg
+new file mode 100644
+index 000000000..348308472
+--- /dev/null
++++ b/tcl/openocd.ac03_2s_sil_bs.cfg
+@@ -0,0 +1,53 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Example OpenOCD user configuration for the AmpereOne
++# and AmpereOne X Development Platforms
++#
++# Copyright (c) 2022-2023, Ampere Computing LLC
++#
++
++# Command Line Argument Description
++#
++# JTAGFREQ
++# Override the default JTAG clock frequency
++# If not specified, defaults to "1000" kHz
++# Syntax: -c "set JTAGFREQ {1000}"
++
++# Operating System Environment Variable Overrides
++#
++# OCD_TELNET_PORT
++# Specify OpenOCD's Telnet port
++# csh:  setenv OCD_TELNET_PORT 4444
++# bash: export OCD_TELNET_PORT=4444
++#
++# OCD_TCL_PORT
++# Specify OpenOCD's TCL port
++# csh:  setenv OCD_TCL_PORT 6666
++# bash: export OCD_TCL_PORT=6666
++
++bindto 0.0.0.0
++#debug_level 3
++
++if { [info exists env(OCD_TELNET_PORT)] } {
++	telnet_port $::env(OCD_TELNET_PORT)
++}
++
++if { [info exists env(OCD_TCL_PORT)] } {
++	tcl_port $::env(OCD_TCL_PORT)
++}
++
++#
++# Interface Configuration
++#
++
++source [find interface/ftdi/olimex-arm-usb-ocd-h.cfg]
++
++#
++# Board (Platform) Configuration
++#
++
++if { ![info exists JTAGFREQ] } {
++	set JTAGFREQ 1000
++}
++
++source [find board/ampere_ac03_2s_bs.cfg]
+-- 
+2.25.1
+

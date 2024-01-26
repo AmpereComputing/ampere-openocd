@@ -1,0 +1,240 @@
+From e726d00e589827b1792c98026665c123864c2774 Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Fri, 12 Mar 2021 17:46:20 -0500
+Subject: [PATCH 27/33] QS|MQ: boundary-scan user configs [DO NOT UPSTREAM]
+
+Add boundary-scan user configuration files for
+Ampere Altra and Ampere Altra Max
+
+Configured for the Olimex ARM-USB-OCD-H JTAG probe.
+https://www.olimex.com/Products/ARM/JTAG/ARM-USB-OCD-H/
+
+OpenOCD configured for the Ampere Altra and Ampere Altra Max options
+1. One and two socket platforms
+
+Change-Id: I5ac67718692293f722d1c787820f89bc61888503
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ tcl/openocd.mq_1s_bs.cfg | 47 ++++++++++++++++++++++++++++++++++++++++
+ tcl/openocd.mq_2s_bs.cfg | 47 ++++++++++++++++++++++++++++++++++++++++
+ tcl/openocd.qs_1s_bs.cfg | 46 +++++++++++++++++++++++++++++++++++++++
+ tcl/openocd.qs_2s_bs.cfg | 46 +++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 186 insertions(+)
+ create mode 100644 tcl/openocd.mq_1s_bs.cfg
+ create mode 100644 tcl/openocd.mq_2s_bs.cfg
+ create mode 100644 tcl/openocd.qs_1s_bs.cfg
+ create mode 100644 tcl/openocd.qs_2s_bs.cfg
+
+diff --git a/tcl/openocd.mq_1s_bs.cfg b/tcl/openocd.mq_1s_bs.cfg
+new file mode 100644
+index 000000000..17c5a4215
+--- /dev/null
++++ b/tcl/openocd.mq_1s_bs.cfg
+@@ -0,0 +1,47 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Example OpenOCD user configuration for the Ampere Altra Max
++# Development Platform
++#
++# Copyright (c) 2020-2023, Ampere Computing LLC
++#
++
++# Command Line Argument Description
++#
++# JTAGFREQ
++# Override the default JTAG clock frequency
++# If not specified, defaults to "5000" kHz
++# Syntax: -c "set JTAGFREQ {5000}"
++#
++# SYSNAME
++# Override the default system name
++# If not specified, defaults to "mq"
++# Syntax: -c "set SYSNAME {mq}"
++
++bindto 0.0.0.0
++#debug_level 3
++
++#gdb_port 3333
++#telnet_port 4444
++#tcl_port 6666
++
++#
++# Interface Configuration
++#
++
++source [find interface/ftdi/olimex-arm-usb-ocd-h.cfg]
++
++#
++# Board (Platform) Configuration
++#
++
++if { ![info exists JTAGFREQ] } {
++	set JTAGFREQ 5000
++}
++
++if { ![info exists SYSNAME] } {
++	set SYSNAME mq
++}
++
++set MQ_ENABLE ""
++source [find board/ampere_qs_mq_1s_bs.cfg]
+diff --git a/tcl/openocd.mq_2s_bs.cfg b/tcl/openocd.mq_2s_bs.cfg
+new file mode 100644
+index 000000000..f22fae197
+--- /dev/null
++++ b/tcl/openocd.mq_2s_bs.cfg
+@@ -0,0 +1,47 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Example OpenOCD user configuration for the Ampere Altra Max
++# Development Platform
++#
++# Copyright (c) 2020-2023, Ampere Computing LLC
++#
++
++# Command Line Argument Description
++#
++# JTAGFREQ
++# Override the default JTAG clock frequency
++# If not specified, defaults to "5000" kHz
++# Syntax: -c "set JTAGFREQ {5000}"
++#
++# SYSNAME
++# Override the default system name
++# If not specified, defaults to "mq"
++# Syntax: -c "set SYSNAME {mq}"
++
++bindto 0.0.0.0
++#debug_level 3
++
++#gdb_port 3333
++#telnet_port 4444
++#tcl_port 6666
++
++#
++# Interface Configuration
++#
++
++source [find interface/ftdi/olimex-arm-usb-ocd-h.cfg]
++
++#
++# Board (Platform) Configuration
++#
++
++if { ![info exists JTAGFREQ] } {
++	set JTAGFREQ 5000
++}
++
++if { ![info exists SYSNAME] } {
++	set SYSNAME mq
++}
++
++set MQ_ENABLE ""
++source [find board/ampere_qs_mq_2s_bs.cfg]
+diff --git a/tcl/openocd.qs_1s_bs.cfg b/tcl/openocd.qs_1s_bs.cfg
+new file mode 100644
+index 000000000..e59ec637c
+--- /dev/null
++++ b/tcl/openocd.qs_1s_bs.cfg
+@@ -0,0 +1,46 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Example OpenOCD user configuration for the Ampere Altra
++# Development Platform
++#
++# Copyright (c) 2019-2023, Ampere Computing LLC
++#
++
++# Command Line Argument Description
++#
++# JTAGFREQ
++# Override the default JTAG clock frequency
++# If not specified, defaults to "5000" kHz
++# Syntax: -c "set JTAGFREQ {5000}"
++#
++# SYSNAME
++# Override the default system name
++# If not specified, defaults to "qs"
++# Syntax: -c "set SYSNAME {qs}"
++
++bindto 0.0.0.0
++#debug_level 3
++
++#gdb_port 3333
++#telnet_port 4444
++#tcl_port 6666
++
++#
++# Interface Configuration
++#
++
++source [find interface/ftdi/olimex-arm-usb-ocd-h.cfg]
++
++#
++# Board (Platform) Configuration
++#
++
++if { ![info exists JTAGFREQ] } {
++	set JTAGFREQ 5000
++}
++
++if { ![info exists SYSNAME] } {
++	set SYSNAME qs
++}
++
++source [find board/ampere_qs_mq_1s_bs.cfg]
+diff --git a/tcl/openocd.qs_2s_bs.cfg b/tcl/openocd.qs_2s_bs.cfg
+new file mode 100644
+index 000000000..7e1129b71
+--- /dev/null
++++ b/tcl/openocd.qs_2s_bs.cfg
+@@ -0,0 +1,46 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++# Example OpenOCD user configuration for the Ampere Altra
++# Development Platform
++#
++# Copyright (c) 2019-2023, Ampere Computing LLC
++#
++
++# Command Line Argument Description
++#
++# JTAGFREQ
++# Override the default JTAG clock frequency
++# If not specified, defaults to "5000" kHz
++# Syntax: -c "set JTAGFREQ {5000}"
++#
++# SYSNAME
++# Override the default system name
++# If not specified, defaults to "qs"
++# Syntax: -c "set SYSNAME {qs}"
++
++bindto 0.0.0.0
++#debug_level 3
++
++#gdb_port 3333
++#telnet_port 4444
++#tcl_port 6666
++
++#
++# Interface Configuration
++#
++
++source [find interface/ftdi/olimex-arm-usb-ocd-h.cfg]
++
++#
++# Board (Platform) Configuration
++#
++
++if { ![info exists JTAGFREQ] } {
++	set JTAGFREQ 5000
++}
++
++if { ![info exists SYSNAME] } {
++	set SYSNAME qs
++}
++
++source [find board/ampere_qs_mq_2s_bs.cfg]
+-- 
+2.25.1
+

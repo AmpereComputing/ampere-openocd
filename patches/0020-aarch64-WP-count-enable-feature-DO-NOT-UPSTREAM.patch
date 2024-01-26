@@ -1,0 +1,126 @@
+From fc388e6550bd081cb6f6849ef14d87dbee950413 Mon Sep 17 00:00:00 2001
+From: Madhuri Murthy <madhurim@os.amperecomputing.com>
+Date: Thu, 29 Jun 2023 16:36:48 -0600
+Subject: [PATCH 20/33] aarch64: WP count enable feature [DO NOT UPSTREAM]
+
+Add support for Ampere's implementation defined HW WP count enable
+feature.
+
+Change-Id: Ib951d69e5b33525924b0269dbc153d3db1545740
+Signed-off-by: Madhuri Murthy <madhurim@os.amperecomputing.com>
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/target/aarch64.c | 30 +++++++++++++++++++++++++++---
+ src/target/aarch64.h |  7 +++++++
+ 2 files changed, 34 insertions(+), 3 deletions(-)
+
+diff --git a/src/target/aarch64.c b/src/target/aarch64.c
+index 80c4d635f..aa241e234 100644
+--- a/src/target/aarch64.c
++++ b/src/target/aarch64.c
+@@ -26,6 +26,7 @@
+ #include <helper/time_support.h>
+ 
+ static enum aarch64_bpcnt_mode bpcnt_mode = AARCH64_BPCNT_OFF;
++static enum aarch64_wpcnt_mode wpcnt_mode = AARCH64_WPCNT_OFF;
+ 
+ enum restart_mode {
+ 	RESTART_LAZY,
+@@ -2809,6 +2810,10 @@ static int aarch64_examine_first(struct target *target)
+ 
+ 	/* Setup Watchpoint Register Pairs */
+ 	aarch64->wp_num = (uint32_t)((debug >> 20) & 0x0F) + 1;
++	if (aarch64->wpcnt_mode == AARCH64_WPCNT_ON) {
++		/* Reserve upper two watchpoints for implementation defined feature */
++		aarch64->wp_num -= 2;
++	}
+ 	aarch64->wp_num_available = aarch64->wp_num;
+ 	aarch64->wp_list = calloc(aarch64->wp_num, sizeof(struct aarch64_brp));
+ 	for (i = 0; i < aarch64->wp_num; i++) {
+@@ -2875,6 +2880,7 @@ static int aarch64_init_arch_info(struct target *target,
+ 	aarch64->isrmasking_mode = AARCH64_ISRMASK_ON;
+ 	aarch64->step_only_mode = AARCH64_STEPONLY_OFF; /* resume smp cpus while stepping single cpu */
+ 	aarch64->bpcnt_mode = bpcnt_mode;
++	aarch64->wpcnt_mode = wpcnt_mode;
+ 	armv8->arm.dap = dap;
+ 
+ 	/* register arch-specific functions */
+@@ -3227,6 +3233,13 @@ COMMAND_HANDLER(aarch64_bpcnt_command)
+ 	return ERROR_OK;
+ }
+ 
++COMMAND_HANDLER(aarch64_wpcnt_command)
++{
++	wpcnt_mode = AARCH64_WPCNT_ON;
++
++	return ERROR_OK;
++}
++
+ COMMAND_HANDLER(aarch64_mcrmrc_command)
+ {
+ 	bool is_mcr = false;
+@@ -3566,22 +3579,33 @@ static const struct command_registration aarch64_command_handlers[] = {
+ 	COMMAND_REGISTRATION_DONE
+ };
+ 
+-static const struct command_registration aarch64_bpcnt_handler[] = {
++static const struct command_registration aarch64_bpwpcnt_handler[] = {
+ 	{
+-		.name = "bkpt_cnt",
++		.name = "bp_cnt",
+ 		.mode = COMMAND_CONFIG,
+ 		.help = "Enable Ampere implementation defined feature",
+ 		.usage = "",
+ 		.handler = aarch64_bpcnt_command,
+ 	},
++
++	{
++		.name = "wp_cnt",
++		.mode = COMMAND_CONFIG,
++		.help = "Enable Ampere implementation defined feature",
++		.usage = "",
++		.handler = aarch64_wpcnt_command,
++	},
++
+ 	COMMAND_REGISTRATION_DONE
+ };
+ 
+ int impdef_register_commands(struct command_context *cmd_ctx)
+ {
+-	return register_commands(cmd_ctx, NULL, aarch64_bpcnt_handler);
++	return register_commands(cmd_ctx, NULL, aarch64_bpwpcnt_handler);
+ }
+ 
++
++
+ struct target_type aarch64_target = {
+ 	.name = "aarch64",
+ 
+diff --git a/src/target/aarch64.h b/src/target/aarch64.h
+index 0f9814d00..68920a35a 100644
+--- a/src/target/aarch64.h
++++ b/src/target/aarch64.h
+@@ -45,6 +45,11 @@ enum aarch64_bpcnt_mode {
+ 	AARCH64_BPCNT_ON,
+ };
+ 
++enum aarch64_wpcnt_mode {
++	AARCH64_WPCNT_OFF,
++	AARCH64_WPCNT_ON,
++};
++
+ struct aarch64_brp {
+ 	int used;
+ 	int type;
+@@ -80,6 +85,8 @@ struct aarch64_common {
+ 	enum aarch64_cti_mode cti_mode;
+ 
+ 	enum aarch64_bpcnt_mode bpcnt_mode;
++
++	enum aarch64_wpcnt_mode wpcnt_mode;
+ };
+ 
+ static inline struct aarch64_common *
+-- 
+2.25.1
+
