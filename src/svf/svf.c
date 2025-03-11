@@ -926,6 +926,23 @@ static int svf_copy_hexstring_to_binary(char *str, uint8_t **bin, int orig_bit_l
 	return ERROR_OK;
 }
 
+static bool is_zero_mask(const void *_mask, int size)
+{
+	const uint8_t *mask = _mask;
+	int i;
+
+	int nbytes = size / 8;
+
+	for (i = 0; i < nbytes; i++) {
+		if (mask[i])
+			return false;
+	}
+
+	unsigned int trailing = size % 8;
+
+	return (!trailing || (mask[nbytes] & ((1 << trailing) - 1)) == 0) ? true : false;
+}
+
 static int svf_check_tdo(void)
 {
 	int i, len, index_var;
@@ -933,19 +950,22 @@ static int svf_check_tdo(void)
 	for (i = 0; i < svf_check_tdo_para_index; i++) {
 		index_var = svf_check_tdo_para[i].buffer_offset;
 		len = svf_check_tdo_para[i].bit_len;
-		if ((svf_check_tdo_para[i].enabled)
-				&& !buf_eq_mask(&svf_tdi_buffer[index_var], &svf_tdo_buffer[index_var],
-				&svf_mask_buffer[index_var], len)) {
-			LOG_ERROR("tdo check error at line %d",
-				svf_check_tdo_para[i].line_num);
-			SVF_BUF_LOG(ERROR, &svf_tdi_buffer[index_var], len, "READ");
-			SVF_BUF_LOG(ERROR, &svf_tdo_buffer[index_var], len, "WANT");
-			SVF_BUF_LOG(ERROR, &svf_mask_buffer[index_var], len, "MASK");
+		if (svf_check_tdo_para[i].enabled) {
+			if (is_zero_mask(&svf_mask_buffer[index_var], len)) {
+				SVF_BUF_LOG(USER, &svf_tdi_buffer[index_var], len, "READ");
+			} else if (!buf_eq_mask(&svf_tdi_buffer[index_var], &svf_tdo_buffer[index_var],
+						&svf_mask_buffer[index_var], len)) {
+				LOG_ERROR("tdo check error at line %d",
+						svf_check_tdo_para[i].line_num);
+				SVF_BUF_LOG(ERROR, &svf_tdi_buffer[index_var], len, "READ");
+				SVF_BUF_LOG(ERROR, &svf_tdo_buffer[index_var], len, "WANT");
+				SVF_BUF_LOG(ERROR, &svf_mask_buffer[index_var], len, "MASK");
 
-			if (svf_ignore_error == 0)
-				return ERROR_FAIL;
-			else
+				if (svf_ignore_error == 0)
+					return ERROR_FAIL;
+
 				svf_ignore_error++;
+			}
 		}
 	}
 	svf_check_tdo_para_index = 0;
