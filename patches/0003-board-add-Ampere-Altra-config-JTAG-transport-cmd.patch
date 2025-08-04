@@ -1,0 +1,43 @@
+From b98c30a0e320f25440a074bd353a427f1076f098 Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Tue, 6 May 2025 14:02:12 -0600
+Subject: [PATCH 03/35] board: add Ampere Altra config JTAG transport cmd
+
+Since transport auto-detection is deprecated, add the transport select
+command to choose the JTAG transport for the Ampere Altra Family
+processors.
+
+Change-Id: Iddb584a315856f65f5f58316281680ccb859d606
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ tcl/board/ampere_qs_mq_1s.cfg | 1 +
+ tcl/board/ampere_qs_mq_2s.cfg | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/tcl/board/ampere_qs_mq_1s.cfg b/tcl/board/ampere_qs_mq_1s.cfg
+index bc649edb8..b410fc325 100644
+--- a/tcl/board/ampere_qs_mq_1s.cfg
++++ b/tcl/board/ampere_qs_mq_1s.cfg
+@@ -67,6 +67,7 @@ if { [info exists SYSNAME] } {
+ # Configure Resets
+ #
+ 
++transport select jtag
+ jtag_ntrst_delay 100
+ reset_config trst_only
+ 
+diff --git a/tcl/board/ampere_qs_mq_2s.cfg b/tcl/board/ampere_qs_mq_2s.cfg
+index 76d82d214..57f6496dd 100644
+--- a/tcl/board/ampere_qs_mq_2s.cfg
++++ b/tcl/board/ampere_qs_mq_2s.cfg
+@@ -86,6 +86,7 @@ if { ![info exists SPLITSMP] } {
+ # Configure Resets
+ #
+ 
++transport select jtag
+ jtag_ntrst_delay 100
+ reset_config trst_only
+ 
+-- 
+2.25.1
+
