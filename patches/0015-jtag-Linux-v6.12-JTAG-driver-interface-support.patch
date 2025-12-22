@@ -1,0 +1,1252 @@
+From d8575b1f2e72fe577af4e9829540416fda08509e Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Thu, 4 Mar 2021 12:30:00 -0500
+Subject: [PATCH 15/32] jtag: Linux v6.12 JTAG driver interface support
+
+Add remote debug support for the upstream community JTAG driver
+for Linux v6.12.
+
+Both software and hardware accelerated remote debug modes for the
+upstream community OS JTAG driver are supported.
+
+Tested on an Ampere systems with AST2500 and AST2600 BMCs
+
+Change-Id: I4e3866fe3b3d5c09628e3c900ca36874504fe6c0
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ configure.ac                   |  11 +
+ src/helper/uapi_linux_jtag.h   | 389 ++++++++++++++++++
+ src/jtag/drivers/Makefile.am   |   3 +
+ src/jtag/drivers/jtag_driver.c | 719 +++++++++++++++++++++++++++++++++
+ src/jtag/interface.h           |   1 +
+ src/jtag/interfaces.c          |   3 +
+ tcl/interface/jtag_driver.cfg  |  19 +
+ 7 files changed, 1145 insertions(+)
+ create mode 100644 src/helper/uapi_linux_jtag.h
+ create mode 100644 src/jtag/drivers/jtag_driver.c
+ create mode 100644 tcl/interface/jtag_driver.cfg
+
+diff --git a/configure.ac b/configure.ac
+index 6efcf24f2..b3a626d97 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -360,6 +360,10 @@ AC_ARG_ENABLE([parport_giveio],
+       [Enable use of giveio for parport (deprecated, for CygWin only)]),
+     [parport_use_giveio=$enableval], [parport_use_giveio=])
+ 
++AC_ARG_ENABLE([jtag_driver],
++  AS_HELP_STRING([--enable-jtag_driver], [Enable building support for JTAG DRIVER]),
++  [build_jtag_driver=$enableval], [build_jtag_driver=yes])
++
+ AC_ARG_ENABLE([gw16012],
+   AS_HELP_STRING([--enable-gw16012], [Enable building support for the Gateworks GW16012 JTAG Programmer]),
+   [build_gw16012=$enableval], [build_gw16012=no])
+@@ -504,6 +508,12 @@ AS_IF([test "x$parport_use_giveio" = "xyes"], [
+   AC_DEFINE([PARPORT_USE_GIVEIO], [0], [0 if you don't want parport to use giveio.])
+ ])
+ 
++AS_IF([test "x$build_jtag_driver" = "xyes"], [
++  AC_DEFINE([BUILD_JTAG_DRIVER], [1], [1 if you want JTAG DRIVER.])
++], [
++  AC_DEFINE([BUILD_JTAG_DRIVER], [0], [0 if you don't want JTAG DRIVER.])
++])
++
+ AS_IF([test "x$build_gw16012" = "xyes"], [
+   AC_DEFINE([BUILD_GW16012], [1], [1 if you want the Gateworks GW16012 driver.])
+ ], [
+@@ -726,6 +736,7 @@ AS_IF([test "x$enable_esp_usb_jtag" != "xno"], [
+ AM_CONDITIONAL([RELEASE], [test "x$build_release" = "xyes"])
+ AM_CONDITIONAL([GIVEIO], [test "x$parport_use_giveio" = "xyes"])
+ AM_CONDITIONAL([BITBANG], [test "x$build_bitbang" = "xyes"])
++AM_CONDITIONAL([JTAG_DRIVER], [test "x$build_jtag_driver" = "xyes"])
+ AM_CONDITIONAL([USB_BLASTER_DRIVER], [test "x$enable_usb_blaster" != "xno" -o "x$enable_usb_blaster_2" != "xno"])
+ AM_CONDITIONAL([GW16012], [test "x$build_gw16012" = "xyes"])
+ AM_CONDITIONAL([USE_LIBUSB1], [test "x$use_libusb1" = "xyes"])
+diff --git a/src/helper/uapi_linux_jtag.h b/src/helper/uapi_linux_jtag.h
+new file mode 100644
+index 000000000..09c6e16e2
+--- /dev/null
++++ b/src/helper/uapi_linux_jtag.h
+@@ -0,0 +1,389 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright (c) 2018 Mellanox Technologies. All rights reserved. */
++/* Copyright (c) 2018 Oleksandr Shamray <oleksandrs@mellanox.com> */
++/* Copyright (c) 2019 Intel Corporation */
++
++typedef __signed__ char __s8;
++typedef unsigned char __u8;
++
++typedef __signed__ short __s16;
++typedef unsigned short __u16;
++
++typedef __signed__ int __s32;
++typedef unsigned int __u32;
++
++typedef __signed__ long long __s64;
++typedef unsigned long long __u64;
++
++#ifndef __UAPI_LINUX_JTAG_H
++#define __UAPI_LINUX_JTAG_H
++
++#define JTAG_MAX_XFER_DATA_LEN 65535
++
++/*
++ * JTAG_XFER_MODE: JTAG transfer mode. Used to set JTAG controller transfer mode
++ * This is bitmask for feature param in jtag_mode for ioctl JTAG_SIOCMODE
++ */
++#define  JTAG_XFER_MODE 0
++/*
++ * JTAG_CONTROL_MODE: JTAG controller mode. Used to set JTAG controller mode
++ * This is bitmask for feature param in jtag_mode for ioctl JTAG_SIOCMODE
++ */
++#define  JTAG_CONTROL_MODE 1
++/*
++ * JTAG_TCK_CYCLE_DELAY_COUNT: JTAG delay counter for aspeed_jtag_tck_cycle. Used
++ * set the number of jtag_tck_cycle delays repetitions.
++ * This is bitmask for feature param in jtag_mode for ioctl JTAG_SIOCMODE
++ */
++#define  JTAG_TCK_CYCLE_DELAY_COUNT 2
++/*
++ * JTAG_CONTROLLER_OUTPUT_DISABLE: JTAG controller mode output disable, it is
++ * used to enable other devices to own the JTAG bus.
++ * This is bitmask for mode param in jtag_mode for ioctl JTAG_SIOCMODE
++ */
++#define  JTAG_CONTROLLER_OUTPUT_DISABLE 0
++/*
++ * JTAG_CONTROLLER_MODE: JTAG controller mode. Used to set JTAG controller in
++ * host mode.
++ * This is bitmask for mode param in jtag_mode for ioctl JTAG_SIOCMODE
++ */
++#define  JTAG_CONTROLLER_MODE 1
++/*
++ * JTAG_XFER_HW_MODE: JTAG hardware mode. Used to set HW drived or bitbang
++ * mode. This is bitmask for mode param in jtag_mode for ioctl JTAG_SIOCMODE
++ */
++#define  JTAG_XFER_HW_MODE 1
++/*
++ * JTAG_XFER_SW_MODE: JTAG software mode. Used to set SW drived or bitbang
++ * mode. This is bitmask for mode param in jtag_mode for ioctl JTAG_SIOCMODE
++ */
++#define  JTAG_XFER_SW_MODE 0
++
++/**
++ * enum jtag_tapstate:
++ *
++ * @JTAG_STATE_TLRESET: JTAG state machine Test Logic Reset state
++ * @JTAG_STATE_IDLE: JTAG state machine IDLE state
++ * @JTAG_STATE_SELECTDR: JTAG state machine SELECT_DR state
++ * @JTAG_STATE_CAPTUREDR: JTAG state machine CAPTURE_DR state
++ * @JTAG_STATE_SHIFTDR: JTAG state machine SHIFT_DR state
++ * @JTAG_STATE_EXIT1DR: JTAG state machine EXIT-1 DR state
++ * @JTAG_STATE_PAUSEDR: JTAG state machine PAUSE_DR state
++ * @JTAG_STATE_EXIT2DR: JTAG state machine EXIT-2 DR state
++ * @JTAG_STATE_UPDATEDR: JTAG state machine UPDATE DR state
++ * @JTAG_STATE_SELECTIR: JTAG state machine SELECT_IR state
++ * @JTAG_STATE_CAPTUREIR: JTAG state machine CAPTURE_IR state
++ * @JTAG_STATE_SHIFTIR: JTAG state machine SHIFT_IR state
++ * @JTAG_STATE_EXIT1IR: JTAG state machine EXIT-1 IR state
++ * @JTAG_STATE_PAUSEIR: JTAG state machine PAUSE_IR state
++ * @JTAG_STATE_EXIT2IR: JTAG state machine EXIT-2 IR state
++ * @JTAG_STATE_UPDATEIR: JTAG state machine UPDATE IR state
++ * @JTAG_STATE_CURRENT: JTAG current state, saved by driver
++ */
++enum jtag_tapstate {
++	JTAG_STATE_TLRESET,
++	JTAG_STATE_IDLE,
++	JTAG_STATE_SELECTDR,
++	JTAG_STATE_CAPTUREDR,
++	JTAG_STATE_SHIFTDR,
++	JTAG_STATE_EXIT1DR,
++	JTAG_STATE_PAUSEDR,
++	JTAG_STATE_EXIT2DR,
++	JTAG_STATE_UPDATEDR,
++	JTAG_STATE_SELECTIR,
++	JTAG_STATE_CAPTUREIR,
++	JTAG_STATE_SHIFTIR,
++	JTAG_STATE_EXIT1IR,
++	JTAG_STATE_PAUSEIR,
++	JTAG_STATE_EXIT2IR,
++	JTAG_STATE_UPDATEIR,
++	JTAG_STATE_CURRENT
++};
++
++/**
++ * enum jtag_reset:
++ *
++ * @JTAG_NO_RESET: JTAG run TAP from current state
++ * @JTAG_FORCE_RESET: JTAG force TAP to reset state
++ */
++enum jtag_reset {
++	JTAG_NO_RESET = 0,
++	JTAG_FORCE_RESET = 1,
++};
++
++/**
++ * enum jtag_xfer_type:
++ *
++ * @JTAG_SIR_XFER: SIR transfer
++ * @JTAG_SDR_XFER: SDR transfer
++ */
++enum jtag_xfer_type {
++	JTAG_SIR_XFER = 0,
++	JTAG_SDR_XFER = 1,
++};
++
++/**
++ * enum jtag_xfer_direction:
++ *
++ * @JTAG_READ_XFER: read transfer
++ * @JTAG_WRITE_XFER: write transfer
++ * @JTAG_READ_WRITE_XFER: read & write transfer
++ */
++enum jtag_xfer_direction {
++	JTAG_READ_XFER = 1,
++	JTAG_WRITE_XFER = 2,
++	JTAG_READ_WRITE_XFER = 3,
++};
++
++/**
++ * struct jtag_tap_state - forces JTAG state machine to go into a TAPC
++ * state
++ *
++ * @reset: 0 - run IDLE/PAUSE from current state
++ *         1 - go through TEST_LOGIC/RESET state before  IDLE/PAUSE
++ * @from: initital jtag state
++ * @endstate: jtag end state
++ * @tck: clock counter
++ *
++ * Structure provide interface to JTAG device for JTAG set state execution.
++ */
++struct jtag_tap_state {
++	__u8	reset;
++	__u8	from;
++	__u8	endstate;
++	__u32	tck;
++};
++
++/**
++ * union pad_config - Padding Configuration:
++ *
++ * @type: transfer type
++ * @pre_pad_number: Number of prepadding bits bit[11:0]
++ * @post_pad_number: Number of prepadding bits bit[23:12]
++ * @pad_data : Bit value to be used by pre and post padding bit[24]
++ * @int_value: unsigned int packed padding configuration value bit[32:0]
++ *
++ * Structure provide pre and post padding configuration in a single __u32
++ */
++union pad_config {
++	struct {
++		__u32 pre_pad_number	: 12;
++		__u32 post_pad_number	: 12;
++		__u32 pad_data		: 1;
++		__u32 rsvd		: 7;
++	};
++	__u32 int_value;
++};
++
++/**
++ * struct jtag_xfer - jtag xfer:
++ *
++ * @type: transfer type
++ * @direction: xfer direction
++ * @from: xfer current state
++ * @endstate: xfer end state
++ * @padding: xfer padding
++ * @length: xfer bits length
++ * @tdio : xfer data array
++ *
++ * Structure provide interface to JTAG device for JTAG SDR/SIR xfer execution.
++ */
++struct jtag_xfer {
++	__u8	type;
++	__u8	direction;
++	__u8	from;
++	__u8	endstate;
++	__u32	padding;
++	__u32	length;
++	__u64	tdio;
++};
++
++/**
++ * struct bitbang_packet - jtag bitbang array packet:
++ *
++ * @data:   JTAG Bitbang struct array pointer(input/output)
++ * @length: array size (input)
++ *
++ * Structure provide interface to JTAG device for JTAG bitbang bundle execution
++ */
++struct bitbang_packet {
++	struct tck_bitbang *data;
++	__u32	length;
++} __attribute__((__packed__));
++
++/**
++ * struct jtag_bitbang - jtag bitbang:
++ *
++ * @tms: JTAG TMS
++ * @tdi: JTAG TDI (input)
++ * @tdo: JTAG TDO (output)
++ *
++ * Structure provide interface to JTAG device for JTAG bitbang execution.
++ */
++struct tck_bitbang {
++	__u8	tms;
++	__u8	tdi;
++	__u8	tdo;
++} __attribute__((__packed__));
++
++/**
++ * struct jtag_mode - jtag mode:
++ *
++ * @feature: 0 - JTAG feature setting selector for JTAG controller HW/SW
++ *           1 - JTAG feature setting selector for controller bus mode
++ *               output (enable / disable).
++ * @mode:    (0 - SW / 1 - HW) for JTAG_XFER_MODE feature(0)
++ *           (0 - output disable / 1 - output enable) for JTAG_CONTROL_MODE
++ *                                                    feature(1)
++ *
++ * Structure provide configuration modes to JTAG device.
++ */
++struct jtag_mode {
++	__u32	feature;
++	__u32	mode;
++};
++
++/* ioctl interface */
++#define __JTAG_IOCTL_MAGIC	0xb9
++
++#define JTAG_SIOCSTATE	_IOW(__JTAG_IOCTL_MAGIC, 0, struct jtag_tap_state)
++#define JTAG_SIOCFREQ	_IOW(__JTAG_IOCTL_MAGIC, 1, unsigned int)
++#define JTAG_GIOCFREQ	_IOR(__JTAG_IOCTL_MAGIC, 2, unsigned int)
++#define JTAG_IOCXFER	_IOWR(__JTAG_IOCTL_MAGIC, 3, struct jtag_xfer)
++#define JTAG_GIOCSTATUS _IOWR(__JTAG_IOCTL_MAGIC, 4, enum jtag_tapstate)
++#define JTAG_SIOCMODE	_IOW(__JTAG_IOCTL_MAGIC, 5, unsigned int)
++#define JTAG_IOCBITBANG	_IOW(__JTAG_IOCTL_MAGIC, 6, unsigned int)
++#define JTAG_SIOCTRST	_IOW(__JTAG_IOCTL_MAGIC, 7, unsigned int)
++
++/**
++ * struct tms_cycle - This structure represents a tms cycle state.
++ *
++ * @tmsbits: is the bitwise representation of the needed tms transitions to
++ *           move from one state to another.
++ * @count:   number of jumps needed to move to the needed state.
++ *
++ */
++struct tms_cycle {
++	unsigned char tmsbits;
++	unsigned char count;
++};
++
++/*
++ * This is the complete set TMS cycles for going from any TAP state to any
++ * other TAP state, following a "shortest path" rule.
++ */
++static const struct tms_cycle _tms_cycle_lookup[][16] = {
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* TLR  */{{0x00, 0}, {0x00, 1}, {0x02, 2}, {0x02, 3}, {0x02, 4}, {0x0a, 4},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x0a, 5}, {0x2a, 6}, {0x1a, 5}, {0x06, 3}, {0x06, 4}, {0x06, 5},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x16, 5}, {0x16, 6}, {0x56, 7}, {0x36, 6} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* RTI  */{{0x07, 3}, {0x00, 0}, {0x01, 1}, {0x01, 2}, {0x01, 3}, {0x05, 3},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x05, 4}, {0x15, 5}, {0x0d, 4}, {0x03, 2}, {0x03, 3}, {0x03, 4},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x0b, 4}, {0x0b, 5}, {0x2b, 6}, {0x1b, 5} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* SelDR*/{{0x03, 2}, {0x03, 3}, {0x00, 0}, {0x00, 1}, {0x00, 2}, {0x02, 2},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x02, 3}, {0x0a, 4}, {0x06, 3}, {0x01, 1}, {0x01, 2}, {0x01, 3},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x05, 3}, {0x05, 4}, {0x15, 5}, {0x0d, 4} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* CapDR*/{{0x1f, 5}, {0x03, 3}, {0x07, 3}, {0x00, 0}, {0x00, 1}, {0x01, 1},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x01, 2}, {0x05, 3}, {0x03, 2}, {0x0f, 4}, {0x0f, 5}, {0x0f, 6},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x2f, 6}, {0x2f, 7}, {0xaf, 8}, {0x6f, 7} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* SDR  */{{0x1f, 5}, {0x03, 3}, {0x07, 3}, {0x07, 4}, {0x00, 0}, {0x01, 1},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x01, 2}, {0x05, 3}, {0x03, 2}, {0x0f, 4}, {0x0f, 5}, {0x0f, 6},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x2f, 6}, {0x2f, 7}, {0xaf, 8}, {0x6f, 7} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* Ex1DR*/{{0x0f, 4}, {0x01, 2}, {0x03, 2}, {0x03, 3}, {0x02, 3}, {0x00, 0},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x00, 1}, {0x02, 2}, {0x01, 1}, {0x07, 3}, {0x07, 4}, {0x07, 5},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x17, 5}, {0x17, 6}, {0x57, 7}, {0x37, 6} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* PDR  */{{0x1f, 5}, {0x03, 3}, {0x07, 3}, {0x07, 4}, {0x01, 2}, {0x05, 3},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x00, 0}, {0x01, 1}, {0x03, 2}, {0x0f, 4}, {0x0f, 5}, {0x0f, 6},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x2f, 6}, {0x2f, 7}, {0xaf, 8}, {0x6f, 7} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* Ex2DR*/{{0x0f, 4}, {0x01, 2}, {0x03, 2}, {0x03, 3}, {0x00, 1}, {0x02, 2},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x02, 3}, {0x00, 0}, {0x01, 1}, {0x07, 3}, {0x07, 4}, {0x07, 5},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x17, 5}, {0x17, 6}, {0x57, 7}, {0x37, 6} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* UpdDR*/{{0x07, 3}, {0x00, 1}, {0x01, 1}, {0x01, 2}, {0x01, 3}, {0x05, 3},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x05, 4}, {0x15, 5}, {0x00, 0}, {0x03, 2}, {0x03, 3}, {0x03, 4},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x0b, 4}, {0x0b, 5}, {0x2b, 6}, {0x1b, 5} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* SelIR*/{{0x01, 1}, {0x01, 2}, {0x05, 3}, {0x05, 4}, {0x05, 5}, {0x15, 5},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x15, 6}, {0x55, 7}, {0x35, 6}, {0x00, 0}, {0x00, 1}, {0x00, 2},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x02, 2}, {0x02, 3}, {0x0a, 4}, {0x06, 3} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* CapIR*/{{0x1f, 5}, {0x03, 3}, {0x07, 3}, {0x07, 4}, {0x07, 5}, {0x17, 5},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x17, 6}, {0x57, 7}, {0x37, 6}, {0x0f, 4}, {0x00, 0}, {0x00, 1},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x01, 1}, {0x01, 2}, {0x05, 3}, {0x03, 2} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* SIR  */{{0x1f, 5}, {0x03, 3}, {0x07, 3}, {0x07, 4}, {0x07, 5}, {0x17, 5},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x17, 6}, {0x57, 7}, {0x37, 6}, {0x0f, 4}, {0x0f, 5}, {0x00, 0},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x01, 1}, {0x01, 2}, {0x05, 3}, {0x03, 2} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* Ex1IR*/{{0x0f, 4}, {0x01, 2}, {0x03, 2}, {0x03, 3}, {0x03, 4}, {0x0b, 4},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x0b, 5}, {0x2b, 6}, {0x1b, 5}, {0x07, 3}, {0x07, 4}, {0x02, 3},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x00, 0}, {0x00, 1}, {0x02, 2}, {0x01, 1} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* PIR  */{{0x1f, 5}, {0x03, 3}, {0x07, 3}, {0x07, 4}, {0x07, 5}, {0x17, 5},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x17, 6}, {0x57, 7}, {0x37, 6}, {0x0f, 4}, {0x0f, 5}, {0x01, 2},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x05, 3}, {0x00, 0}, {0x01, 1}, {0x03, 2} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* Ex2IR*/{{0x0f, 4}, {0x01, 2}, {0x03, 2}, {0x03, 3}, {0x03, 4}, {0x0b, 4},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x0b, 5}, {0x2b, 6}, {0x1b, 5}, {0x07, 3}, {0x07, 4}, {0x00, 1},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x02, 2}, {0x02, 3}, {0x00, 0}, {0x01, 1} },
++
++/*	    TLR        RTI        SelDR      CapDR      SDR        Ex1DR*/
++/* UpdIR*/{{0x07, 3}, {0x00, 1}, {0x01, 1}, {0x01, 2}, {0x01, 3}, {0x05, 3},
++/*	    PDR        Ex2DR      UpdDR      SelIR      CapIR      SIR*/
++	    {0x05, 4}, {0x15, 5}, {0x0d, 4}, {0x03, 2}, {0x03, 3}, {0x03, 4},
++/*	    Ex1IR      PIR        Ex2IR      UpdIR*/
++	    {0x0b, 4}, {0x0b, 5}, {0x2b, 6}, {0x00, 0} },
++};
++
++#endif /* __UAPI_LINUX_JTAG_H */
+diff --git a/src/jtag/drivers/Makefile.am b/src/jtag/drivers/Makefile.am
+index 5216e5d77..b965442c1 100644
+--- a/src/jtag/drivers/Makefile.am
++++ b/src/jtag/drivers/Makefile.am
+@@ -83,6 +83,9 @@ endif
+ if JTAG_DPI
+ DRIVERFILES += %D%/jtag_dpi.c
+ endif
++if JTAG_DRIVER
++DRIVERFILES += %D%/jtag_driver.c
++endif
+ if USB_BLASTER_DRIVER
+ %C%_libocdjtagdrivers_la_LIBADD += %D%/usb_blaster/libocdusbblaster.la
+ include %D%/usb_blaster/Makefile.am
+diff --git a/src/jtag/drivers/jtag_driver.c b/src/jtag/drivers/jtag_driver.c
+new file mode 100644
+index 000000000..1a3ac38e7
+--- /dev/null
++++ b/src/jtag/drivers/jtag_driver.c
+@@ -0,0 +1,719 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++/*
++ * JTAG Driver
++ *
++ * Copyright (C) 2020, 2025, Ampere Computing LLC
++ *
++ * Based on:
++ * ftdi.c: (C) 2012 Andreas Fritiofson, <andreas.fritiofson@gmail.com>
++ * jtag_dpi.c: (C) 2013 Franck Jullien, <elec4fun@gmail.com>
++ *             (C) 2019-2020 Ampere Computing LLC
++ */
++
++#include <sys/ioctl.h>
++
++#include <helper/uapi_linux_jtag.h>
++
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
++#include <jtag/interface.h>
++
++#include <fcntl.h>
++
++#define JTAG_INSTANCE 0
++
++/**
++ * Note: When calculating the 8-bit aligned address below for the maximum
++ * JTAG transfer data bit length, the JTAG_MAX_XFER_DATA_LEN define is
++ * adjusted by one bit to account for a code bug in the open-source Linux
++ * JTAG driver. Due to the driver bug, transfers of exact size
++ * JTAG_MAX_XFER_DATA_LEN bits will fail.
++ */
++#define JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED (((JTAG_MAX_XFER_DATA_LEN) - 1) & (~0x7))
++#define JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED_DIV8 ((JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED) >> 3)
++
++int jtag_instance = JTAG_INSTANCE;
++int jtag_hw_accel;
++int jtag_fd;
++
++#define MAX_BB_LEN 64
++struct tck_bitbang bitbang[MAX_BB_LEN];
++
++/* Local Function Prototypes */
++static enum jtag_tapstate state_conversion(enum tap_state state);
++static int move_to_state(enum tap_state end_state);
++static int jtag_driver_get_speed(int *speed);
++static int jtag_driver_set_speed(int speed);
++static int jtag_driver_speed_div(int speed, int *khz);
++static int jtag_driver_execute_scan(struct scan_command *scan);
++static int jtag_driver_execute_runtest(int num_cycles, enum tap_state end_state);
++static int jtag_driver_execute_stableclocks(struct stableclocks_command *stableclocks);
++static int jtag_driver_reset(int trst, int srst);
++static int jtag_driver_execute_sleep(struct sleep_command *sleep);
++static int jtag_driver_execute_tms(struct tms_command *tms);
++static int jtag_driver_execute_tlr_reset(enum tap_state end_state);
++static int jtag_driver_execute_queue(struct jtag_command *cmd_queue);
++static int jtag_driver_init(void);
++static int jtag_driver_quit(void);
++
++static enum jtag_tapstate state_conversion(enum tap_state state)
++{
++	enum jtag_tapstate endstate;
++
++	switch (state) {
++	case TAP_DREXIT2:
++		endstate = JTAG_STATE_EXIT2DR;
++		break;
++	case TAP_DREXIT1:
++		endstate = JTAG_STATE_EXIT1DR;
++		break;
++	case TAP_DRSHIFT:
++		endstate = JTAG_STATE_SHIFTDR;
++		break;
++	case TAP_DRPAUSE:
++		endstate = JTAG_STATE_PAUSEDR;
++		break;
++	case TAP_IRSELECT:
++		endstate = JTAG_STATE_SELECTIR;
++		break;
++	case TAP_DRUPDATE:
++		endstate = JTAG_STATE_UPDATEDR;
++		break;
++	case TAP_DRCAPTURE:
++		endstate = JTAG_STATE_CAPTUREDR;
++		break;
++	case TAP_DRSELECT:
++		endstate = JTAG_STATE_SELECTDR;
++		break;
++	case TAP_IREXIT2:
++		endstate = JTAG_STATE_EXIT2IR;
++		break;
++	case TAP_IREXIT1:
++		endstate = JTAG_STATE_EXIT1IR;
++		break;
++	case TAP_IRSHIFT:
++		endstate = JTAG_STATE_SHIFTIR;
++		break;
++	case TAP_IRPAUSE:
++		endstate = JTAG_STATE_PAUSEIR;
++		break;
++	case TAP_IDLE:
++		endstate = JTAG_STATE_IDLE;
++		break;
++	case TAP_IRUPDATE:
++		endstate = JTAG_STATE_UPDATEIR;
++		break;
++	case TAP_IRCAPTURE:
++		endstate = JTAG_STATE_CAPTUREIR;
++		break;
++	case TAP_RESET:
++		endstate = JTAG_STATE_TLRESET;
++		break;
++	default:
++		LOG_ERROR("JTAG DRIVER ERROR: unknown JTAG state encountered %d", state);
++		endstate = JTAG_STATE_IDLE;
++	}
++
++	return endstate;
++}
++
++/**
++ * Function move_to_state moves the TAP controller from the current state to a
++ * end_state through a path determined by the JTAG_SIOCSTATE IOCTL call.
++ *
++ * @param end_state is the destination state for the move.
++ */
++static int move_to_state(enum tap_state end_state)
++{
++	struct jtag_tap_state goal_state;
++	struct jtag_mode jmode;
++	int ret_errno;
++
++	if (jtag_hw_accel) {
++		jmode.feature = JTAG_XFER_MODE;
++		jmode.mode = JTAG_XFER_SW_MODE;
++		ret_errno = ioctl(jtag_fd, JTAG_SIOCMODE, &jmode);
++		if (ret_errno < 0) {
++			LOG_ERROR("JTAG DRIVER ERROR: IOCTL JTAG_XFER_MODE call fail for %s", __func__);
++			LOG_ERROR("JTAG DRIVER ERROR: Unable to disable hardware mode");
++			return ERROR_FAIL;
++		}
++	}
++
++	goal_state.reset = JTAG_NO_RESET;
++	goal_state.from = state_conversion(tap_get_state());
++	goal_state.endstate = state_conversion(end_state);
++	goal_state.tck = 0;
++
++	ret_errno = ioctl(jtag_fd, JTAG_SIOCSTATE, &goal_state);
++	if (ret_errno < 0) {
++		LOG_ERROR("JTAG DRIVER ERROR: IOCTL JTAG_SIOCSTATE call fail for %s", __func__);
++		LOG_ERROR("JTAG DRIVER ERROR: state transition failed");
++		return ERROR_FAIL;
++	}
++
++	tap_set_state(end_state);
++
++	if (jtag_hw_accel) {
++		jmode.feature = JTAG_XFER_MODE;
++		jmode.mode = JTAG_XFER_HW_MODE;
++		ret_errno = ioctl(jtag_fd, JTAG_SIOCMODE, &jmode);
++		if (ret_errno < 0) {
++			LOG_ERROR("JTAG DRIVER ERROR: IOCTL JTAG_XFER_MODE call fail for %s", __func__);
++			LOG_ERROR("JTAG DRIVER ERROR: Unable to enable hardware mode");
++			return ERROR_FAIL;
++		}
++	}
++
++	return ERROR_OK;
++}
++
++static int jtag_driver_get_speed(int *speed)
++{
++	int local_speed;
++	int ret_errno;
++
++	ret_errno = ioctl(jtag_fd, JTAG_GIOCFREQ, &local_speed);
++	if (ret_errno < 0) {
++		LOG_ERROR("JTAG DRIVER ERROR: IOCTL JTAG_XFER_MODE call fail for %s", __func__);
++		LOG_ERROR("JTAG DRIVER ERROR: unable to retrieve JTAG TCK frequency");
++		return ERROR_FAIL;
++	}
++
++	if (!speed)
++		LOG_INFO("JTAG DRIVER INFO: Read JTAG TCK frequency of %u", local_speed);
++	else
++		*speed = local_speed;
++
++	return ERROR_OK;
++}
++
++static int jtag_driver_set_speed(int expected_speed)
++{
++	int actual_speed;
++	int ret_errno;
++	int ret = ERROR_OK;
++
++	ret_errno = ioctl(jtag_fd, JTAG_SIOCFREQ, &expected_speed);
++	if (ret_errno < 0) {
++		LOG_ERROR("JTAG DRIVER ERROR: IOCTL JTAG_SIOCFREQ call fail for %s", __func__);
++		LOG_ERROR("JTAG DRIVER ERROR: unable to program JTAG TCK frequency");
++		return ERROR_FAIL;
++	}
++
++	ret = jtag_driver_get_speed(&actual_speed);
++	if (ret != ERROR_OK)
++		LOG_ERROR("JTAG DRIVER ERROR: Set requested JTAG TCK frequency "
++			"to %u, unable to verify set frequency", expected_speed);
++	else
++		LOG_INFO("JTAG DRIVER INFO: Requested JTAG TCK frequency "
++			"%u, actual frequency %u", expected_speed, actual_speed);
++
++	return ret;
++}
++
++static int jtag_driver_speed_div(int speed, int *khz)
++{
++	*khz = speed / 1000;
++	return ERROR_OK;
++}
++
++static int jtag_driver_khz(int khz, int *jtag_speed)
++{
++	*jtag_speed = khz * 1000;
++	return ERROR_OK;
++}
++
++/**
++ * jtag_driver_execute_scan - launches a IR-scan or DR-scan
++ * @cmd: the command to launch
++ *
++ * Launch a JTAG IR-scan or DR-scan
++ *
++ * Returns ERROR_OK if OK, otherwise ERROR_XXX
++ */
++static int jtag_driver_execute_scan(struct scan_command *scan)
++{
++	enum scan_type type;
++	enum tap_state end_state;
++	struct jtag_xfer xfer;
++	uint8_t *data_buf_start;
++	uint8_t *data_buf_chunk;
++	int num_bits;
++	int ret_errno;
++	int ret = ERROR_OK;
++
++	type = jtag_scan_type(scan);
++
++	LOG_DEBUG_IO("JTAG DRIVER DEBUG: scan %s, type:%d, end in %s",
++		scan->ir_scan ? "IRSCAN" : "DRSCAN", type, tap_state_name(scan->end_state));
++
++	num_bits = jtag_build_buffer(scan, &data_buf_start);
++	if (!data_buf_start) {
++		LOG_ERROR("jtag_build_buffer call failed, data_buf_start == NULL, "
++			"file %s, line %d", __FILE__, __LINE__);
++		return ERROR_FAIL;
++	}
++	data_buf_chunk = data_buf_start;
++
++	while (num_bits > 0) {
++		if (scan->ir_scan)
++			xfer.type = JTAG_SIR_XFER;
++		else
++			xfer.type = JTAG_SDR_XFER;
++
++		if (type == SCAN_IN) {
++			/* From target to host */
++			xfer.direction = JTAG_READ_XFER;
++		} else if (type == SCAN_OUT) {
++			/* From host to target */
++			xfer.direction = JTAG_WRITE_XFER;
++		} else {
++			/* Full-duplex scan */
++			xfer.direction = JTAG_READ_WRITE_XFER;
++		}
++		xfer.from = state_conversion(tap_get_state());
++		xfer.padding = 0;
++		if (num_bits > JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED) {
++			xfer.length = (__u32)JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED;
++			if (scan->ir_scan)
++				xfer.endstate = state_conversion(TAP_IRPAUSE);
++			else
++				xfer.endstate = state_conversion(TAP_DRPAUSE);
++		} else {
++			xfer.length = (__u32)num_bits;
++			xfer.endstate = state_conversion(scan->end_state);
++		}
++		xfer.tdio = (__u64)(uintptr_t)data_buf_chunk;
++
++		ret_errno = ioctl(jtag_fd, JTAG_IOCXFER, &xfer);
++		if (ret_errno < 0) {
++			LOG_ERROR("JTAG DRIVER ERROR: IOCTL JTAG_IOCXFER call fail for %s", __func__);
++			LOG_ERROR("JTAG DRIVER ERROR: unable to scan");
++			ret = ERROR_FAIL;
++		} else {
++			if (num_bits > JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED) {
++				if (scan->ir_scan)
++					end_state = TAP_IRPAUSE;
++				else
++					end_state = TAP_DRPAUSE;
++			} else {
++				end_state = scan->end_state;
++			}
++			tap_set_state(end_state);
++
++			if (type != SCAN_OUT)
++				ret = jtag_read_buffer(data_buf_chunk, scan);
++		}
++
++		if (ret != ERROR_OK)
++			break;
++
++		num_bits -= MIN(num_bits, JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED);
++		data_buf_chunk += JTAG_MAX_XFER_DATA_LEN_BYTE_ALIGNED_DIV8;
++	}
++	if (tap_get_state() != scan->end_state && move_to_state(scan->end_state) != ERROR_OK) {
++		LOG_ERROR("JTAG DRIVER ERROR: Fail in %s", __func__);
++		ret = ERROR_FAIL;
++	}
++
++	free(data_buf_start);
++
++	return ret;
++}
++
++static int jtag_driver_execute_runtest(int num_cycles, enum tap_state end_state)
++{
++	struct bitbang_packet bitbang_packet;
++	int bitbang_length;
++	int i, j;
++	int ret_errno;
++
++	LOG_DEBUG_IO("JTAG DRIVER DEBUG: runtest %i cycles, end in %s", num_cycles,
++		tap_state_name(end_state));
++
++	/* only do a move_to_state operation when we're not already in IDLE */
++	if (tap_get_state() != TAP_IDLE && move_to_state(TAP_IDLE) != ERROR_OK) {
++		LOG_ERROR("JTAG DRIVER ERROR: Fail in %s", __func__);
++		return ERROR_FAIL;
++	}
++
++	bitbang_packet.data = bitbang;
++
++	i = 0;
++	while (i < num_cycles) {
++		bitbang_length = num_cycles > MAX_BB_LEN ? MAX_BB_LEN : num_cycles;
++		bitbang_packet.length = bitbang_length;
++		for (j = 0; j < bitbang_length; j++) {
++			bitbang[j].tms = (__u8)0;
++			bitbang[j].tdi = (__u8)0; /* write: host to device */
++			bitbang[j].tdo = (__u8)0; /* read: device to host */
++		}
++
++		ret_errno = ioctl(jtag_fd, JTAG_IOCBITBANG, &bitbang_packet);
++		if (ret_errno < 0) {
++			LOG_ERROR("JTAG DRIVER ERROR: IOCTL JTAG_IOCBITBANG call fail for %s", __func__);
++			LOG_ERROR("JTAG DRIVER ERROR: couldn't execute runtest");
++			return ERROR_FAIL;
++		}
++
++		i += bitbang_length;
++	}
++
++	if (tap_get_state() != end_state && move_to_state(end_state) != ERROR_OK) {
++		LOG_ERROR("JTAG DRIVER ERROR: Fail in %s", __func__);
++		return ERROR_FAIL;
++	}
++
++	return ERROR_OK;
++}
++
++static int jtag_driver_execute_stableclocks(struct stableclocks_command *stableclocks)
++{
++	struct bitbang_packet bitbang_packet;
++	int bitbang_length;
++	int num_cycles = stableclocks->num_cycles;
++	int i, j;
++	int ret_errno;
++	uint8_t tms;
++
++	LOG_DEBUG_IO("JTAG DRIVER DEBUG: clocks %i while in %s", num_cycles,
++		tap_state_name(tap_get_state()));
++
++	tms = (tap_get_state() == TAP_RESET ? 1 : 0);
++
++	bitbang_packet.data = bitbang;
++
++	i = 0;
++	while (i < num_cycles) {
++		bitbang_length = num_cycles > MAX_BB_LEN ? MAX_BB_LEN : num_cycles;
++		bitbang_packet.length = bitbang_length;
++		for (j = 0; j < bitbang_length; j++) {
++			bitbang[j].tms = (__u8)tms;
++			bitbang[j].tdi = (__u8)0; /* write: host to device */
++			bitbang[j].tdo = (__u8)0; /* read: device to host */
++		}
++
++		ret_errno = ioctl(jtag_fd, JTAG_IOCBITBANG, &bitbang_packet);
++		if (ret_errno < 0) {
++			LOG_ERROR("JTAG DRIVER ERROR: IOCTL JTAG_IOCBITBANG call fail for %s", __func__);
++			LOG_ERROR("JTAG DRIVER ERROR: couldn't execute stableclocks");
++			return ERROR_FAIL;
++		}
++
++		i += bitbang_length;
++	}
++
++	return ERROR_OK;
++}
++
++static int jtag_driver_execute_tlr_reset(enum tap_state end_state)
++{
++	struct tms_command tms;
++	struct jtag_xfer xfer;
++	uint32_t data_buf;
++	int ret_errno;
++	int ret;
++	uint8_t bits;
++
++	/* Use this TAP reset method for the ASPEED AST2500/2600
++	 * JTAG Master Controller Software Mode and Hardware Mode #1.
++	 */
++
++	/* There are two issues involved with HW Mode #1 of this JTAG Master
++	 * Controller.
++	 */
++
++	/* 1. Resetting the JTAG state machine to Test-Logic-Reset (TLR)
++	 *    doesn't work with the ioctl() JTAG_SIOCSTATE call as it
++	 *    does with Software Mode. The workaround is to force
++	 *    a reset by holding TMS high and pulsing TCK five times.
++	 */
++
++	/* 2. After switching to HW Mode #1 and resetting the JTAG state
++	 *    machine to TLR using the 5xTMS approach, the first SDR Scan read
++	 *    returns incorrect data. The workaround is after switching to
++	 *    HW Mode #1 and resetting to TLR state, perform a dummy DR read
++	 *    (not write) and discard the result.
++	 */
++
++	bits = 0x1F;
++	tms.num_bits = 5;
++	tms.bits = &bits;
++	ret = jtag_driver_execute_tms(&tms);
++	if (ret != ERROR_OK) {
++		LOG_ERROR("JTAG DRIVER ERROR: couldn't reset JTAG state machine");
++		return ERROR_FAIL;
++	}
++
++	tap_set_state(TAP_RESET);
++
++	/* Bug Workaround - perform the dummy DR read */
++	xfer.type = JTAG_SDR_XFER;       /* Type is DR scan */
++	xfer.direction = JTAG_READ_XFER; /* Only perform DR read, no write */
++	xfer.from = state_conversion(tap_get_state());
++	xfer.endstate = JTAG_STATE_TLRESET;
++	xfer.padding = 0;
++	xfer.length = (__u32)1;          /* Only a single bit is needed */
++	xfer.tdio = (__u64)(uintptr_t)(&data_buf);  /* Location to store read result */
++
++	ret_errno = ioctl(jtag_fd, JTAG_IOCXFER, &xfer);
++	if (ret_errno < 0) {
++		LOG_ERROR("JTAG DRIVER ERROR: scan failed");
++		return ERROR_FAIL;
++	}
++
++	if (tap_get_state() != end_state && move_to_state(end_state) != ERROR_OK) {
++		LOG_ERROR("JTAG DRIVER ERROR: Fail in %s", __func__);
++		return ERROR_FAIL;
++	}
++
++	LOG_INFO("JTAG DRIVER INFO: Successfully reset JTAG state machine");
++
++	return ERROR_OK;
++}
++
++static int jtag_driver_reset(int trst, int srst)
++{
++	int ret_errno;
++	int ret = ERROR_OK;
++
++	LOG_DEBUG_IO("JTAG DRIVER DEBUG: reset trst: %i srst %i", trst, srst);
++
++	ret_errno = ioctl(jtag_fd, JTAG_SIOCTRST, &trst);
++	if (ret_errno < 0) {
++		LOG_ERROR("JTAG DRIVER ERROR: IOCTL SIOCTRST call fail for %s", __func__);
++		if (trst == 0)
++			LOG_ERROR("JTAG DRIVER ERROR: unable to drive TRST_N high (not active)");
++		else
++			LOG_ERROR("JTAG DRIVER ERROR: unable to drive TRST_N low (active)");
++		ret = ERROR_FAIL;
++	} else if (trst == 1) {
++		LOG_INFO("JTAG DRIVER INFO: Successfully reset JTAG state machine");
++		tap_set_state(TAP_RESET);
++	}
++
++	if (srst == 1) {
++		LOG_ERROR("JTAG DRIVER ERROR: Can't assert SRST: nSRST signal is not defined");
++		ret = ERROR_FAIL;
++	}
++
++	return ret;
++}
++
++static int jtag_driver_execute_sleep(struct sleep_command *sleep)
++{
++	LOG_DEBUG_IO("JTAG DRIVER DEBUG: sleep %" PRIi32 " usec while in %s",
++		sleep->us,
++		tap_state_name(tap_get_state()));
++
++	jtag_sleep(sleep->us);
++
++	return ERROR_OK;
++}
++
++static int jtag_driver_execute_tms(struct tms_command *tms)
++{
++	struct bitbang_packet bitbang_packet;
++	int bitbang_length;
++	int i, j, index;
++	int ret_errno;
++	int tms_num_bits = tms->num_bits;
++	uint8_t tms_bits = tms->bits[0];
++
++	LOG_DEBUG_IO("JTAG DRIVER DEBUG: TMS: %d bits", tms_num_bits);
++
++	bitbang_packet.data = bitbang;
++
++	index = 0;
++	i = 0;
++	while (i < tms_num_bits) {
++		bitbang_length = tms_num_bits > MAX_BB_LEN ? MAX_BB_LEN : tms_num_bits;
++		bitbang_packet.length = bitbang_length;
++		for (j = 0; j < bitbang_length; j++) {
++			bitbang[j].tms = (__u8)((tms_bits >> (i & 0x7)) & 0x1);
++			bitbang[j].tdi = (__u8)0;
++			bitbang[j].tdo = (__u8)0;
++
++			i++;
++			if ((i & 0x7) == 0) {
++				index++;
++				tms_bits = tms->bits[index];
++			}
++		}
++
++		ret_errno = ioctl(jtag_fd, JTAG_IOCBITBANG, &bitbang_packet);
++		if (ret_errno < 0) {
++			LOG_ERROR("JTAG DRIVER ERROR: IOCTL JTAG_IOCBITBANG call fail for %s", __func__);
++			LOG_ERROR("JTAG DRIVER ERROR: execute_tms failed");
++			return ERROR_FAIL;
++		}
++
++		for (j = 0; j < bitbang_length; j++)
++			tap_set_state(tap_state_transition(tap_get_state(), bitbang[j].tms));
++	}
++
++	return ERROR_OK;
++}
++
++static int jtag_driver_execute_queue(struct jtag_command *cmd_queue)
++{
++	struct jtag_command *cmd;
++	int ret = ERROR_OK;
++
++	for (cmd = cmd_queue; ret == ERROR_OK && cmd; cmd = cmd->next) {
++		switch (cmd->type) {
++		case JTAG_SCAN:
++			ret = jtag_driver_execute_scan(cmd->cmd.scan);
++			break;
++		case JTAG_TLR_RESET:
++			ret = jtag_driver_execute_tlr_reset(cmd->cmd.statemove->end_state);
++			break;
++		case JTAG_RUNTEST:
++			ret = jtag_driver_execute_runtest(cmd->cmd.runtest->num_cycles,
++							cmd->cmd.runtest->end_state);
++			break;
++		case JTAG_RESET:
++			ret = jtag_driver_reset(cmd->cmd.reset->trst, cmd->cmd.reset->srst);
++			break;
++		case JTAG_PATHMOVE:
++			break;
++		case JTAG_SLEEP:
++			ret = jtag_driver_execute_sleep(cmd->cmd.sleep);
++			break;
++		case JTAG_STABLECLOCKS:
++			ret = jtag_driver_execute_stableclocks(cmd->cmd.stableclocks);
++			break;
++		case JTAG_TMS:
++			ret = jtag_driver_execute_tms(cmd->cmd.tms);
++			break;
++		default:
++			LOG_ERROR("JTAG DRIVER ERROR: unknown JTAG command type encountered 0x%X",
++				  cmd->type);
++			ret = ERROR_FAIL;
++			break;
++		}
++	}
++
++	return ret;
++}
++
++static int jtag_driver_init(void)
++{
++	struct jtag_mode jmode;
++	int ret_errno;
++	char buf[32];
++
++	snprintf(buf, sizeof(buf), "/dev/jtag%u", jtag_instance);
++	jtag_fd = open(buf, O_RDWR);
++	if (jtag_fd < 0) {
++		LOG_ERROR("JTAG DRIVER ERROR: Could not open JTAG device");
++		LOG_ERROR("JTAG DRIVER ERROR: Connection to /dev/jtag%u failed", jtag_instance);
++		return ERROR_FAIL;
++	}
++	LOG_INFO("JTAG DRIVER INFO: Connection to /dev/jtag%u succeeded", jtag_instance);
++
++	jmode.feature = JTAG_CONTROL_MODE;
++	jmode.mode = JTAG_CONTROLLER_MODE;
++	ret_errno = ioctl(jtag_fd, JTAG_SIOCMODE, &jmode);
++	if (ret_errno < 0) {
++		LOG_ERROR("JTAG DRIVER ERROR: IOCTL JTAG_SIOCMODE call fail for %s", __func__);
++		LOG_ERROR("JTAG DRIVER ERROR: unable to set JTAG_CONTROL_MODE");
++		return ERROR_FAIL;
++	}
++
++	jmode.feature = JTAG_XFER_MODE;
++	if (jtag_hw_accel == 0)
++		jmode.mode = JTAG_XFER_SW_MODE;
++	else
++		jmode.mode = JTAG_XFER_HW_MODE;
++	ret_errno = ioctl(jtag_fd, JTAG_SIOCMODE, &jmode);
++	if (ret_errno < 0) {
++		LOG_ERROR("JTAG DRIVER ERROR: IOCTL JTAG_SIOCMODE call fail for %s", __func__);
++		LOG_ERROR("JTAG DRIVER ERROR: unable to set JTAG_XFER_MODE");
++		return ERROR_FAIL;
++	} else if (jmode.mode == JTAG_XFER_HW_MODE) {
++		LOG_INFO("JTAG DRIVER INFO: Hardware Acceleration mode enabled");
++	} else {
++		LOG_INFO("JTAG DRIVER INFO: Software mode enabled");
++	}
++
++	return ERROR_OK;
++}
++
++static int jtag_driver_quit(void)
++{
++	int ret = ERROR_OK;
++
++	close(jtag_fd);
++
++	return ret;
++}
++
++COMMAND_HANDLER(jtag_driver_set_instance)
++{
++	if (CMD_ARGC > 1)
++		return ERROR_COMMAND_SYNTAX_ERROR;
++	else if (CMD_ARGC == 1)
++		COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], jtag_instance);
++
++	LOG_INFO("JTAG DRIVER INFO: Using /dev/jtag%u", jtag_instance);
++
++	return ERROR_OK;
++}
++
++COMMAND_HANDLER(jtag_driver_hw_accel)
++{
++	if (CMD_ARGC > 1)
++		return ERROR_COMMAND_SYNTAX_ERROR;
++	else if (CMD_ARGC == 1)
++		COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], jtag_hw_accel);
++
++	if (jtag_hw_accel == 0)
++		LOG_INFO("JTAG DRIVER INFO: Using Software mode");
++	else
++		LOG_INFO("JTAG DRIVER INFO: Using Hardware Acceleration mode");
++
++	return ERROR_OK;
++}
++
++static const struct command_registration jtag_driver_command_handlers[] = {
++	{
++		.name = "jtag_driver_set_instance",
++		.handler = &jtag_driver_set_instance,
++		.mode = COMMAND_CONFIG,
++		.help = "set the instance of the JTAG device",
++		.usage = "description_string",
++	},
++	{
++		.name = "jtag_driver_hw_accel",
++		.handler = &jtag_driver_hw_accel,
++		.mode = COMMAND_CONFIG,
++		.help = "enable or disable JTAG controller hardware acceleration",
++		.usage = "description_string",
++	},
++	COMMAND_REGISTRATION_DONE
++};
++
++static struct jtag_interface jtag_driver_interface = {
++	.supported = DEBUG_CAP_TMS_SEQ,
++	.execute_queue = jtag_driver_execute_queue,
++};
++
++struct adapter_driver jtag_driver_adapter_driver = {
++	.name = "jtag_driver",
++	.transport_ids = TRANSPORT_JTAG,
++	.transport_preferred_id = TRANSPORT_JTAG,
++	.commands = jtag_driver_command_handlers,
++
++	.init = jtag_driver_init,
++	.quit = jtag_driver_quit,
++	.reset = jtag_driver_reset,
++	.speed = jtag_driver_set_speed,
++	.khz = jtag_driver_khz,
++	.speed_div = jtag_driver_speed_div,
++	.jtag_ops = &jtag_driver_interface,
++};
+diff --git a/src/jtag/interface.h b/src/jtag/interface.h
+index 51cbf9ac0..9ad9430f5 100644
+--- a/src/jtag/interface.h
++++ b/src/jtag/interface.h
+@@ -392,6 +392,7 @@ extern struct adapter_driver hl_adapter_driver;
+ extern struct adapter_driver imx_gpio_adapter_driver;
+ extern struct adapter_driver jlink_adapter_driver;
+ extern struct adapter_driver jtag_dpi_adapter_driver;
++extern struct adapter_driver jtag_driver_adapter_driver;
+ extern struct adapter_driver jtag_vpi_adapter_driver;
+ extern struct adapter_driver kitprog_adapter_driver;
+ extern struct adapter_driver linuxgpiod_adapter_driver;
+diff --git a/src/jtag/interfaces.c b/src/jtag/interfaces.c
+index caf5ace99..07298919b 100644
+--- a/src/jtag/interfaces.c
++++ b/src/jtag/interfaces.c
+@@ -98,6 +98,9 @@ struct adapter_driver *adapter_drivers[] = {
+ #if BUILD_JTAG_DPI == 1
+ 		&jtag_dpi_adapter_driver,
+ #endif
++#if BUILD_JTAG_DRIVER == 1
++		&jtag_driver_adapter_driver,
++#endif
+ #if BUILD_JTAG_VPI == 1
+ 		&jtag_vpi_adapter_driver,
+ #endif
+diff --git a/tcl/interface/jtag_driver.cfg b/tcl/interface/jtag_driver.cfg
+new file mode 100644
+index 000000000..8238cb23c
+--- /dev/null
++++ b/tcl/interface/jtag_driver.cfg
+@@ -0,0 +1,19 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++
++#
++# Provide support for the JTAG Driver
++#
++# Copyright (c) 2020, Ampere Computing LLC
++#
++
++adapter driver jtag_driver
++
++# Set the JTAG /dev/jtagX device instance for 'X'
++if { [info exists JTAG_INSTANCE] } {
++   set _JTAG_INSTANCE $JTAG_INSTANCE
++} else {
++   set _JTAG_INSTANCE 0
++}
++
++jtag_driver_set_instance $_JTAG_INSTANCE
++jtag_driver_hw_accel 1
+-- 
+2.43.0
+

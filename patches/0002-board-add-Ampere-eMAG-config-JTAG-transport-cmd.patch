@@ -1,0 +1,30 @@
+From 364e5a8c8fff159d3556e37c361c0c6e6c80dd39 Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Tue, 6 May 2025 14:20:39 -0600
+Subject: [PATCH 02/32] board: add Ampere eMAG config JTAG transport cmd
+
+Since transport auto-detection is deprecated, add the transport
+select command to choose the JTAG transport for the Ampere
+eMAG8180 processor.
+
+Change-Id: I2432b5c71d9f24baf0481685469ac6047a531f5b
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ tcl/board/ampere_emag8180.cfg | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/tcl/board/ampere_emag8180.cfg b/tcl/board/ampere_emag8180.cfg
+index 736be1225..3924a075d 100644
+--- a/tcl/board/ampere_emag8180.cfg
++++ b/tcl/board/ampere_emag8180.cfg
+@@ -16,6 +16,7 @@ adapter speed 2000
+ # Configure Resets
+ #
+ 
++transport select jtag
+ jtag_ntrst_delay 100
+ reset_config trst_only
+ 
+-- 
+2.43.0
+
