@@ -1,0 +1,202 @@
+From 82e72b2c5d139eb1ee0e5bf0637f16e0fcfe3d63 Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Fri, 14 Jan 2022 11:45:15 -0500
+Subject: [PATCH 05/33] target/aarch64: enhanced defer_examine support
+
+Allow user to put a target back into the defer-examine state
+by executing the command "<target> arp_examine detach"
+during a debug session. This can be useful if the user wants
+to detach from the target when performing a custom reset sequence.
+
+With the previous code, if an argument was specified that didn't
+match the string "allow-defer", the code returned value
+"ERROR_COMMAND_ARGUMENT_INVALID".
+
+With the updated code, the result "ERROR_COMMAND_ARGUMENT_INVALID"
+is returned if either "allow-defer" or "detach" is not specified.
+
+Change-Id: I41d5a31d83f180a1e5665f66bce9cf145e21eedc
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/target/aarch64.c     | 20 ++++++++++++++++++++
+ src/target/breakpoints.c |  4 ++--
+ src/target/breakpoints.h |  2 ++
+ src/target/target.c      | 26 ++++++++++----------------
+ src/target/target.h      | 17 +++++++++++++++++
+ 5 files changed, 51 insertions(+), 18 deletions(-)
+
+diff --git a/src/target/aarch64.c b/src/target/aarch64.c
+index f8962cbfd..4e908f160 100644
+--- a/src/target/aarch64.c
++++ b/src/target/aarch64.c
+@@ -2814,6 +2814,26 @@ static int aarch64_examine(struct target *target)
+ {
+ 	int retval = ERROR_OK;
+ 
++	if (target->detach) {
++		if (target_was_examined(target) && target->state == TARGET_HALTED) {
++			LOG_TARGET_DEBUG(target, "Removing breakpoints");
++			breakpoint_remove_all_internal(target);
++			LOG_TARGET_DEBUG(target, "Removing watchpoints");
++			watchpoint_remove_all_internal(target);
++
++			LOG_TARGET_DEBUG(target, "Restoring target state");
++			uint64_t address;
++			retval = aarch64_restore_one(target, true, &address, false, false);
++			if (retval != ERROR_OK)
++				LOG_TARGET_ERROR(target, "Failed to restore target state");
++		}
++		target_reset_examined(target);
++		target_reset_active_polled(target);
++		LOG_TARGET_DEBUG(target, "Detached");
++
++		return retval;
++	}
++
+ 	/* don't re-probe hardware after each reset */
+ 	if (!target_was_examined(target))
+ 		retval = aarch64_examine_first(target);
+diff --git a/src/target/breakpoints.c b/src/target/breakpoints.c
+index f5fe6a965..99c4dabbe 100644
+--- a/src/target/breakpoints.c
++++ b/src/target/breakpoints.c
+@@ -352,7 +352,7 @@ static int breakpoint_remove_internal(struct target *target, target_addr_t addre
+ 	}
+ }
+ 
+-static int breakpoint_remove_all_internal(struct target *target)
++int breakpoint_remove_all_internal(struct target *target)
+ {
+ 	LOG_TARGET_DEBUG(target, "Delete all breakpoints");
+ 
+@@ -441,7 +441,7 @@ static int watchpoint_free(struct target *target, struct watchpoint *watchpoint_
+ 	return ERROR_OK;
+ }
+ 
+-static int watchpoint_remove_all_internal(struct target *target)
++int watchpoint_remove_all_internal(struct target *target)
+ {
+ 	LOG_TARGET_DEBUG(target, "Delete all watchpoints");
+ 
+diff --git a/src/target/breakpoints.h b/src/target/breakpoints.h
+index 4f156cb16..b1524a900 100644
+--- a/src/target/breakpoints.h
++++ b/src/target/breakpoints.h
+@@ -59,6 +59,7 @@ int hybrid_breakpoint_add(struct target *target,
+ 		enum breakpoint_type type);
+ int breakpoint_remove(struct target *target, target_addr_t address);
+ int breakpoint_remove_all(struct target *target);
++int breakpoint_remove_all_internal(struct target *target);
+ 
+ struct breakpoint *breakpoint_find(struct target *target, target_addr_t address);
+ 
+@@ -73,6 +74,7 @@ int watchpoint_add(struct target *target,
+ 		enum watchpoint_rw rw, uint64_t value, uint64_t mask);
+ int watchpoint_remove(struct target *target, target_addr_t address);
+ int watchpoint_remove_all(struct target *target);
++int watchpoint_remove_all_internal(struct target *target);
+ 
+ /* report type and address of just hit watchpoint */
+ int watchpoint_hit(struct target *target, enum watchpoint_rw *rw,
+diff --git a/src/target/target.c b/src/target/target.c
+index 1920de55c..7ecf4146c 100644
+--- a/src/target/target.c
++++ b/src/target/target.c
+@@ -657,19 +657,6 @@ static int no_mmu(struct target *target, bool *enabled)
+ 	return ERROR_OK;
+ }
+ 
+-/**
+- * Reset the @c examined flag for the given target.
+- */
+-static inline void target_reset_examined(struct target *target)
+-{
+-	target->examined = false;
+-}
+-
+-static inline void target_reset_active_polled(struct target *target)
+-{
+-	target->active_polled = false;
+-}
+-
+ static int default_examine(struct target *target)
+ {
+ 	return ERROR_OK;
+@@ -5320,14 +5307,18 @@ COMMAND_HANDLER(handle_target_configure)
+ COMMAND_HANDLER(handle_target_examine)
+ {
+ 	bool allow_defer = false;
++	bool detach = false;
+ 
+ 	if (CMD_ARGC > 1)
+ 		return ERROR_COMMAND_SYNTAX_ERROR;
+ 
+ 	if (CMD_ARGC == 1) {
+-		if (strcmp(CMD_ARGV[0], "allow-defer"))
++		if (!strcmp(CMD_ARGV[0], "allow-defer"))
++			allow_defer = true;
++		else if (!strcmp(CMD_ARGV[0], "detach"))
++			detach = true;
++		else
+ 			return ERROR_COMMAND_ARGUMENT_INVALID;
+-		allow_defer = true;
+ 	}
+ 
+ 	struct target *target = get_current_target(CMD_CTX);
+@@ -5336,6 +5327,8 @@ COMMAND_HANDLER(handle_target_examine)
+ 		return ERROR_FAIL;
+ 	}
+ 
++	target->detach = detach;
++
+ 	if (allow_defer && target->defer_examine) {
+ 		LOG_INFO("Deferring arp_examine of %s", target_name(target));
+ 		LOG_INFO("Use arp_examine command to examine it manually!");
+@@ -5348,7 +5341,8 @@ COMMAND_HANDLER(handle_target_examine)
+ 		return retval;
+ 	}
+ 
+-	target_set_examined(target);
++	if (!detach)
++		target_set_examined(target);
+ 
+ 	return ERROR_OK;
+ }
+diff --git a/src/target/target.h b/src/target/target.h
+index ce1fc728b..473e14690 100644
+--- a/src/target/target.h
++++ b/src/target/target.h
+@@ -140,6 +140,9 @@ struct target {
+ 	 */
+ 	bool active_polled;
+ 
++	/** Set to true to detach from the target */
++	bool detach;
++
+ 	/**
+ 	 * true if the  target is currently running a downloaded
+ 	 * "algorithm" instead of arbitrary user code. OpenOCD code
+@@ -463,6 +466,20 @@ static inline void target_set_examined(struct target *target)
+ 	target->examined = true;
+ }
+ 
++/**
++ * Reset the @c examined flag for the given target.
++ * Pure paranoia -- targets are zeroed on allocation.
++ */
++static inline void target_reset_examined(struct target *target)
++{
++	target->examined = false;
++}
++
++static inline void target_reset_active_polled(struct target *target)
++{
++	target->active_polled = false;
++}
++
+ /**
+  * Add the @a breakpoint for @a target.
+  *
+-- 
+2.43.0
+

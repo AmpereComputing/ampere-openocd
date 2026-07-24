@@ -1,0 +1,218 @@
+From 2469bde5982114debe221fc229e731869f27d025 Mon Sep 17 00:00:00 2001
+From: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+Date: Thu, 12 Jun 2025 18:32:30 -0400
+Subject: [PATCH 04/33] bkpt: SMP updates wrt future target detach support
+
+This patch provides the framework for future support where CPU targets
+in a SMP group can be transitioned back to the non-examined state.
+
+Targets in a SMP group may not all be examined. Before modifying
+breakpoint/watchpoint state for a processor core
+contained in a SMP group, verify the core has been examined.
+
+For software breakpoints, assign the breakpoint to the current
+selected processor target, not the first target in the SMP group.
+The first target in the SMP group may be in the non-examined state.
+
+Also verify at least one target in a SMP group is examined
+before setting the breakpoint/watchpoint, otherwise
+generate an error to the user.
+
+Change-Id: I9923ed20ea02ad92cce5ea12558f95e0ae1b161a
+Signed-off-by: Daniel Goehring <dgoehrin@os.amperecomputing.com>
+---
+ src/target/breakpoints.c | 106 +++++++++++++++++++++++++++------------
+ 1 file changed, 74 insertions(+), 32 deletions(-)
+
+diff --git a/src/target/breakpoints.c b/src/target/breakpoints.c
+index 2c46cd3a6..f5fe6a965 100644
+--- a/src/target/breakpoints.c
++++ b/src/target/breakpoints.c
+@@ -219,12 +219,21 @@ int breakpoint_add(struct target *target,
+ 	enum breakpoint_type type)
+ {
+ 	if (target->smp && type == BKPT_HARD) {
++		bool breakpoint_set = false;
+ 		struct target_list *list_node;
+ 		foreach_smp_target(list_node, target->smp_targets) {
+ 			struct target *curr = list_node->target;
+-			int retval = breakpoint_add_internal(curr, address, length, type);
+-			if (retval != ERROR_OK)
+-				return retval;
++			if (target_was_examined(curr)) {
++				int retval = breakpoint_add_internal(curr, address, length, type);
++				if (retval != ERROR_OK)
++					return retval;
++				breakpoint_set = true;
++			}
++		}
++
++		if (!breakpoint_set) {
++			LOG_ERROR("Unable to set breakpoint. At least one SMP target must be examined.");
++			return ERROR_FAIL;
+ 		}
+ 
+ 		return ERROR_OK;
+@@ -239,13 +248,22 @@ int context_breakpoint_add(struct target *target,
+ 	enum breakpoint_type type)
+ {
+ 	if (target->smp) {
++		bool breakpoint_set = false;
+ 		struct target_list *head;
+ 
+ 		foreach_smp_target(head, target->smp_targets) {
+ 			struct target *curr = head->target;
+-			int retval = context_breakpoint_add_internal(curr, asid, length, type);
+-			if (retval != ERROR_OK)
+-				return retval;
++			if (target_was_examined(curr)) {
++				int retval = context_breakpoint_add_internal(curr, asid, length, type);
++				if (retval != ERROR_OK)
++					return retval;
++				breakpoint_set = true;
++			}
++		}
++
++		if (!breakpoint_set) {
++			LOG_ERROR("Unable to set breakpoint. At least one SMP target must be examined.");
++			return ERROR_FAIL;
+ 		}
+ 
+ 		return ERROR_OK;
+@@ -261,13 +279,22 @@ int hybrid_breakpoint_add(struct target *target,
+ 	enum breakpoint_type type)
+ {
+ 	if (target->smp) {
++		bool breakpoint_set = false;
+ 		struct target_list *head;
+ 
+ 		foreach_smp_target(head, target->smp_targets) {
+ 			struct target *curr = head->target;
+-			int retval = hybrid_breakpoint_add_internal(curr, address, asid, length, type);
+-			if (retval != ERROR_OK)
+-				return retval;
++			if (target_was_examined(curr)) {
++				int retval = hybrid_breakpoint_add_internal(curr, address, asid, length, type);
++				if (retval != ERROR_OK)
++					return retval;
++				breakpoint_set = true;
++			}
++		}
++
++		if (!breakpoint_set) {
++			LOG_ERROR("Unable to set breakpoint. At least one SMP target must be examined.");
++			return ERROR_FAIL;
+ 		}
+ 
+ 		return ERROR_OK;
+@@ -352,18 +379,19 @@ int breakpoint_remove(struct target *target, target_addr_t address)
+ 
+ 		foreach_smp_target(head, target->smp_targets) {
+ 			struct target *curr = head->target;
+-			int status = breakpoint_remove_internal(curr, address);
++			if (target_was_examined(curr)) {
++				int status = breakpoint_remove_internal(curr, address);
+ 
+-			if (status != ERROR_BREAKPOINT_NOT_FOUND) {
+-				num_found_breakpoints++;
++				if (status != ERROR_BREAKPOINT_NOT_FOUND) {
++					num_found_breakpoints++;
+ 
+-				if (status != ERROR_OK) {
+-					LOG_TARGET_ERROR(curr, "failed to remove breakpoint at address " TARGET_ADDR_FMT, address);
+-					retval = status;
++					if (status != ERROR_OK) {
++						LOG_TARGET_ERROR(curr, "failed to remove breakpoint at address " TARGET_ADDR_FMT, address);
++						retval = status;
++					}
+ 				}
+ 			}
+ 		}
+-
+ 	} else {
+ 		retval = breakpoint_remove_internal(target, address);
+ 
+@@ -398,6 +426,7 @@ static int watchpoint_free(struct target *target, struct watchpoint *watchpoint_
+ 
+ 	if (!watchpoint)
+ 		return ERROR_OK;
++
+ 	retval = target_remove_watchpoint(target, watchpoint);
+ 	if (retval != ERROR_OK) {
+ 		LOG_TARGET_ERROR(target, "could not remove watchpoint #%d on this target",
+@@ -440,14 +469,16 @@ static int breakpoint_watchpoint_remove_all(struct target *target, enum breakpoi
+ 		foreach_smp_target(head, target->smp_targets) {
+ 			struct target *curr = head->target;
+ 
+-			int status = ERROR_OK;
+-			if (bp_wp == BREAKPOINT)
+-				status = breakpoint_remove_all_internal(curr);
+-			else
+-				status = watchpoint_remove_all_internal(curr);
++			if (target_was_examined(curr)) {
++				int status = ERROR_OK;
++				if (bp_wp == BREAKPOINT)
++					status = breakpoint_remove_all_internal(curr);
++				else
++					status = watchpoint_remove_all_internal(curr);
+ 
+-			if (status != ERROR_OK)
+-				retval = status;
++				if (status != ERROR_OK)
++					retval = status;
++			}
+ 		}
+ 	} else {
+ 		if (bp_wp == BREAKPOINT)
+@@ -552,13 +583,22 @@ int watchpoint_add(struct target *target, target_addr_t address,
+ 		unsigned int length, enum watchpoint_rw rw, uint64_t value, uint64_t mask)
+ {
+ 	if (target->smp) {
++		bool watchpoint_set = false;
+ 		struct target_list *head;
+ 
+ 		foreach_smp_target(head, target->smp_targets) {
+ 			struct target *curr = head->target;
+-			int retval = watchpoint_add_internal(curr, address, length, rw, value, mask);
+-			if (retval != ERROR_OK)
+-				return retval;
++			if (target_was_examined(curr)) {
++				int retval = watchpoint_add_internal(curr, address, length, rw, value, mask);
++				if (retval != ERROR_OK)
++					return retval;
++				watchpoint_set = true;
++			}
++		}
++
++		if (!watchpoint_set) {
++			LOG_ERROR("Unable to set watchpoint. At least one SMP target must be examined.");
++			return ERROR_FAIL;
+ 		}
+ 
+ 		return ERROR_OK;
+@@ -594,14 +634,16 @@ int watchpoint_remove(struct target *target, target_addr_t address)
+ 
+ 		foreach_smp_target(head, target->smp_targets) {
+ 			struct target *curr = head->target;
+-			int status = watchpoint_remove_internal(curr, address);
++			if (target_was_examined(curr)) {
++				int status = watchpoint_remove_internal(curr, address);
+ 
+-			if (status != ERROR_WATCHPOINT_NOT_FOUND) {
+-				num_found_watchpoints++;
++				if (status != ERROR_WATCHPOINT_NOT_FOUND) {
++					num_found_watchpoints++;
+ 
+-				if (status != ERROR_OK) {
+-					LOG_TARGET_ERROR(curr, "failed to remove watchpoint at address " TARGET_ADDR_FMT, address);
+-					retval = status;
++					if (status != ERROR_OK) {
++						LOG_TARGET_ERROR(curr, "failed to remove watchpoint at address " TARGET_ADDR_FMT, address);
++						retval = status;
++					}
+ 				}
+ 			}
+ 		}
+-- 
+2.43.0
+
